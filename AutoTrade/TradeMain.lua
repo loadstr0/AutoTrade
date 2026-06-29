@@ -3,119 +3,250 @@
 return function(ctx)
 	local TradeMain = {}
 
-	local Logger = ctx.Modules.Logger
 	local PlayersUtil = ctx.Modules.PlayersUtil
 	local InventoryUtil = ctx.Modules.InventoryUtil
-	local TradeState = ctx.Modules.TradeState
 	local TradeActions = ctx.Modules.TradeActions
+	local TradeState = ctx.Modules.TradeState
+	local Logger = ctx.Modules.Logger
+	local Config = ctx.Modules.Config
 
-	function TradeMain.Start(config)
-		if config.AllowTrade ~= true then
-			return false, "trade_not_allowed"
+	local function getConfig()
+		if type(Config.Resolve) == "function" then
+			return Config.Resolve(ctx)
 		end
+
+		if type(Config.Get) == "function" then
+			return Config.Get(ctx)
+		end
+
+		return Config
+	end
+
+	local function waitBuyerStillHere(buyerName)
+		local buyer = PlayersUtil.findPlayer(buyerName)
+
+		if not buyer then
+			return nil, "buyer_left"
+		end
+
+		return buyer
+	end
+
+	local function waitForTradeOpen(timeout)
+		timeout = tonumber(timeout or 12) or 12
+
+		if TradeState.waitForTradeOpen then
+			return TradeState.waitForTradeOpen(timeout)
+		end
+
+		if TradeState.waitOpen then
+			return TradeState.waitOpen(timeout)
+		end
+
+		if TradeState.waitForTrade then
+			return TradeState.waitForTrade(timeout)
+		end
+
+		task.wait(timeout)
+		return true
+	end
+
+	local function addItem(item)
+		if TradeActions.addItemToTrade then
+			return TradeActions.addItemToTrade(item)
+		end
+
+		if TradeActions.addItem then
+			return TradeActions.addItem(item)
+		end
+
+		return false, "missing_add_item_function"
+	end
+
+	local function readyUp()
+		if TradeActions.readyUp then
+			return TradeActions.readyUp()
+		end
+
+		if TradeActions.ready then
+			return TradeActions.ready()
+		end
+
+		return false, "missing_ready_function"
+	end
+
+	local function confirmTrade()
+		if TradeActions.confirmTrade then
+			return TradeActions.confirmTrade()
+		end
+
+		if TradeActions.confirm then
+			return TradeActions.confirm()
+		end
+
+		return false, "missing_confirm_function"
+	end
+
+	local function cancelTrade()
+		if TradeActions.cancelTrade then
+			pcall(function()
+				TradeActions.cancelTrade()
+			end)
+		elseif TradeActions.cancel then
+			pcall(function()
+				TradeActions.cancel()
+			end)
+		end
+	end
+
+	local function sendRequest(buyer)
+		if TradeActions.sendTradeRequest then
+			return TradeActions.sendTradeRequest(buyer)
+		end
+
+		if TradeActions.sendRequest then
+			return TradeActions.sendRequest(buyer)
+		end
+
+		return false, "missing_send_request_function"
+	end
+
+	function TradeMain.Start()
+		local config = getConfig()
 
 		Logger.info("Starting trade delivery.")
 
-		local buyer = PlayersUtil.waitForPlayer(config.BuyerName, config.BuyerWaitTimeout)
+		if not config.BuyerName or config.BuyerName == "" then
+			return false, "missing_buyer_name"
+		end
+
+		if not config.ItemName or config.ItemName == "" then
+			return false, "missing_item_name"
+		end
+
+		if not config.ItemType or config.ItemType == "" then
+			return false, "missing_item_type"
+		end
+
+		local buyer = PlayersUtil.findPlayer(config.BuyerName)
 
 		if not buyer then
-			return false, "buyer_not_in_server"
+			return false, "buyer_not_found"
 		end
 
 		Logger.info("Buyer found:", buyer.Name, buyer.UserId)
-		
+
 		local cooldown = tonumber(config.TradeJoinCooldown or 10) or 10
-		
+
 		if cooldown > 0 then
 			Logger.info("Waiting", cooldown, "seconds before sending trade request because of join cooldown.")
 			task.wait(cooldown)
-		
-			local stillHere = PlayersUtil.findPlayer(config.BuyerName)
-		
-			if not stillHere then
+
+			buyer = PlayersUtil.findPlayer(config.BuyerName)
+
+			if not buyer then
 				return false, "buyer_left_during_join_cooldown"
 			end
-		
-			buyer = stillHere
+
 			Logger.info("Buyer still in server after cooldown:", buyer.Name, buyer.UserId)
 		end
-		
+
 		local item = InventoryUtil.findTradableItem(config.ItemType, config.ItemName)
 
 		if not item then
 			return false, "item_not_found"
 		end
 
-		TradeActions.sendRequest(buyer)
+		local retries = tonumber(config.TradeRequestRetries or 5) or 5
+		local retryDelay = tonumber(config.TradeRequestRetryDelay or 3) or 3
+		local openTimeout = tonumber(config.TradeOpenTimeout or 12) or 12
 
-		local replion = TradeState.waitForTrade(config.TimeoutTradeAccept)
+		for attempt = 1, retries do
+			Logger.info("Trade attempt", attempt, "/", retries)
 
-		if not replion then
-			return false, "trade_not_opened"
-		end
+			buyer = waitBuyerStillHere(config.BuyerName)
 
-		local added = false
-
-		for attempt = 1, config.MaxAddAttempts do
-			Logger.info("Add item attempt:", attempt)
-
-			local ok = TradeActions.addItem(config.ItemType, item)
-
-			if ok then
-				added = true
-				break
+			if not buyer then
+				return false, "buyer_left_before_trade_request"
 			end
 
-			task.wait(config.RetryDelay)
-		end
+			local requestOk, requestResult = sendRequest(buyer)
 
-		if not added then
-			return false, "add_item_failed"
-		end
+			if not requestOk then
+				Logger.warn("Trade request failed:", tostring(requestResult))
 
-		local readyOk = false
+				if attempt < retries then
+					Logger.info("Retrying trade request in", retryDelay, "seconds...")
+					task.wait(retryDelay)
+				end
 
-		for attempt = 1, config.MaxReadyAttempts do
-			Logger.info("Ready attempt:", attempt)
-
-			local ok = TradeActions.ready()
-
-			if ok then
-				readyOk = true
-				break
+				continue
 			end
 
-			task.wait(config.RetryDelay)
-		end
+			Logger.info("Trade request sent. Waiting for trade window/open state...")
 
-		if not readyOk then
-			return false, "ready_failed"
-		end
+			local openOk, openResult = waitForTradeOpen(openTimeout)
 
-		Logger.info("Ready fired. Confirm will retry until accepted or attempts end.")
-		task.wait(4)
+			if not openOk then
+				Logger.warn("Trade window did not open or request was declined:", tostring(openResult))
 
-		local confirmOk = false
+				cancelTrade()
 
-		for attempt = 1, config.MaxConfirmAttempts do
-			Logger.info("Confirm attempt:", attempt)
+				if attempt < retries then
+					Logger.info("Resending trade request in", retryDelay, "seconds...")
+					task.wait(retryDelay)
+				end
 
-			local ok = TradeActions.confirm()
-
-			if ok then
-				confirmOk = true
-				break
+				continue
 			end
 
-			task.wait(0.5)
+			Logger.info("Trade window opened.")
+
+			local addOk, addResult = addItem(item)
+
+			if not addOk then
+				Logger.warn("Add item failed:", tostring(addResult))
+				cancelTrade()
+				return false, "add_item_failed"
+			end
+
+			Logger.info("Item added to trade.")
+
+			local readyOk, readyResult = readyUp()
+
+			if not readyOk then
+				Logger.warn("Ready failed:", tostring(readyResult))
+				cancelTrade()
+				return false, "ready_failed"
+			end
+
+			Logger.info("Ready sent.")
+
+			local confirmWait = tonumber(config.TradeConfirmDelay or 6) or 6
+			Logger.info("Waiting", confirmWait, "seconds before confirm.")
+			task.wait(confirmWait)
+
+			local confirmOk, confirmResult = confirmTrade()
+
+			if not confirmOk then
+				Logger.warn("Confirm failed:", tostring(confirmResult))
+				cancelTrade()
+
+				if attempt < retries then
+					Logger.info("Trade failed/closed. Retrying in", retryDelay, "seconds...")
+					task.wait(retryDelay)
+				end
+
+				continue
+			end
+
+			Logger.info("Confirm sent.")
+			Logger.info("Trade delivery finished successfully.")
+
+			return true, "trade_complete"
 		end
 
-		if not confirmOk then
-			return false, "confirm_failed"
-		end
-
-		Logger.info("Trade confirm fired.")
-		return true, "trade_confirmed"
+		return false, "trade_request_declined_or_not_accepted"
 	end
 
 	return TradeMain
