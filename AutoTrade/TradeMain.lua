@@ -23,7 +23,23 @@ return function(ctx)
 		end
 
 		Logger.info("Buyer found:", buyer.Name, buyer.UserId)
-
+		
+		local cooldown = tonumber(config.TradeJoinCooldown or 10) or 10
+		
+		if cooldown > 0 then
+			Logger.info("Waiting", cooldown, "seconds before sending trade request because of join cooldown.")
+			task.wait(cooldown)
+		
+			local stillHere = PlayersUtil.findPlayer(config.BuyerName)
+		
+			if not stillHere then
+				return false, "buyer_left_during_join_cooldown"
+			end
+		
+			buyer = stillHere
+			Logger.info("Buyer still in server after cooldown:", buyer.Name, buyer.UserId)
+		end
+		
 		local item = InventoryUtil.findTradableItem(config.ItemType, config.ItemName)
 
 		if not item then
