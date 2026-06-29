@@ -9,46 +9,158 @@ return function(ctx)
 	local TradeInfo = require(ReplicatedStorage.Shared.Trading.TradeInfo)
 	local Remotes = TradeInfo.Remotes
 
-	local function invoke(name, ...)
-		local remote = Remotes[name]
-
+	local function invoke(label, remote, ...)
 		if not remote then
-			Logger.error("Missing trade remote:", name)
-			return false, "missing_remote"
+			Logger.warn(label, "remote missing")
+			return false, "remote_missing"
 		end
 
-		local ok, result = pcall(function(...)
-			return remote:InvokeServer(...)
-		end, ...)
+		local args = { ... }
+
+		local ok, result = pcall(function()
+			if remote:IsA("RemoteFunction") then
+				return remote:InvokeServer(table.unpack(args))
+			else
+				remote:FireServer(table.unpack(args))
+				return true
+			end
+		end)
 
 		if not ok then
-			Logger.error(name, "failed:", result)
+			Logger.warn(label, "error:", result)
 			return false, result
 		end
 
-		Logger.info(name, "=>", tostring(result))
-		return result, nil
+		Logger.info(label, "=>", tostring(result))
+
+		if result == false then
+			return false, result
+		end
+
+		return true, result
 	end
 
-	function TradeActions.sendRequest(player)
-		return invoke("SendTradeRequest", player)
+	local function getUuid(item)
+		if type(item) == "string" then
+			return item
+		end
+
+		if type(item) == "table" then
+			return item.UUID or item.uuid or item.Id or item.id or item.ItemId or item.itemId
+		end
+
+		return nil
 	end
 
-	function TradeActions.addItem(itemType, item)
-		return invoke("AddItemToTrade", itemType, item)
+	local function getItemType(item)
+		if type(item) == "table" then
+			return item.ItemType or item.itemType or item.Type or item.type
+		end
+
+		return nil
 	end
 
-	function TradeActions.ready()
-		return invoke("ReadyUp")
+	function TradeActions.sendTradeRequest(buyer)
+		local userId = buyer.UserId
+
+		local attempts = {
+			function()
+				return invoke("SendTradeRequest player", Remotes.SendTradeRequest, buyer)
+			end,
+
+			function()
+				return invoke("SendTradeRequest userId", Remotes.SendTradeRequest, userId)
+			end,
+		}
+
+		for _, fn in ipairs(attempts) do
+			local ok, result = fn()
+
+			if ok then
+				return true, result
+			end
+		end
+
+		return false, "send_trade_request_failed"
 	end
 
-	function TradeActions.confirm()
-		return invoke("ConfirmTrade")
+	function TradeActions.addItemToTrade(item)
+		local uuid = getUuid(item)
+		local itemType = getItemType(item)
+
+		if not uuid then
+			return false, "missing_item_uuid"
+		end
+
+		Logger.info("Adding item to trade:")
+		Logger.info("  UUID =", uuid)
+		Logger.info("  Type =", tostring(itemType))
+
+		local attempts = {}
+
+		if itemType then
+			table.insert(attempts, {
+				name = "AddItemToTrade itemType/uuid",
+				fn = function()
+					return invoke("AddItemToTrade itemType/uuid", Remotes.AddItemToTrade, itemType, uuid)
+				end,
+			})
+
+			table.insert(attempts, {
+				name = "AddItemToTrade uuid/itemType",
+				fn = function()
+					return invoke("AddItemToTrade uuid/itemType", Remotes.AddItemToTrade, uuid, itemType)
+				end,
+			})
+		end
+
+		table.insert(attempts, {
+			name = "AddItemToTrade uuid",
+			fn = function()
+				return invoke("AddItemToTrade uuid", Remotes.AddItemToTrade, uuid)
+			end,
+		})
+
+		table.insert(attempts, {
+			name = "AddItemToTrade table",
+			fn = function()
+				return invoke("AddItemToTrade table", Remotes.AddItemToTrade, {
+					UUID = uuid,
+					ItemType = itemType,
+				})
+			end,
+		})
+
+		for _, attempt in ipairs(attempts) do
+			local ok, result = attempt.fn()
+
+			if ok then
+				Logger.info("AddItemToTrade worked with:", attempt.name)
+				return true, result
+			end
+		end
+
+		return false, "add_item_failed"
 	end
 
-	function TradeActions.cancel()
-		return invoke("CancelTrade")
+	function TradeActions.readyUp()
+		return invoke("ReadyUp", Remotes.ReadyUp)
 	end
+
+	function TradeActions.confirmTrade()
+		return invoke("ConfirmTrade", Remotes.ConfirmTrade)
+	end
+
+	function TradeActions.cancelTrade()
+		return invoke("CancelTrade", Remotes.CancelTrade)
+	end
+
+	-- Aliases in case TradeMain uses older names.
+	TradeActions.sendRequest = TradeActions.sendTradeRequest
+	TradeActions.addItem = TradeActions.addItemToTrade
+	TradeActions.ready = TradeActions.readyUp
+	TradeActions.confirm = TradeActions.confirmTrade
+	TradeActions.cancel = TradeActions.cancelTrade
 
 	return TradeActions
 end
