@@ -22,99 +22,373 @@ return function(ctx)
 		return Config
 	end
 
-	local function waitBuyerStillHere(buyerName)
-		local buyer = PlayersUtil.findPlayer(buyerName)
+	local function cfgNumber(config, key, default)
+		local value = tonumber(config[key])
+
+		if value == nil then
+			return default
+		end
+
+		return value
+	end
+
+	local function cfgBool(config, key, default)
+		local value = config[key]
+
+		if value == nil then
+			return default
+		end
+
+		return value == true
+	end
+
+	local function getItemUuid(item)
+		if type(item) == "string" then
+			return item
+		end
+
+		if type(item) == "table" then
+			return item.UUID
+				or item.uuid
+				or item.Id
+				or item.id
+				or item.ItemId
+				or item.itemId
+		end
+
+		return nil
+	end
+
+	local function getUserIdString(player)
+		if typeof(player) == "Instance" and player:IsA("Player") then
+			return tostring(player.UserId)
+		end
+
+		if type(player) == "table" and player.UserId then
+			return tostring(player.UserId)
+		end
+
+		return nil
+	end
+
+	local function findBuyer(config)
+		local buyer = PlayersUtil.findPlayer(config.BuyerName)
 
 		if not buyer then
-			return nil, "buyer_left"
+			return nil, "buyer_not_found"
 		end
 
 		return buyer
 	end
 
-	local function waitForTradeOpen(timeout)
-		timeout = tonumber(timeout or 12) or 12
+	local function safeCancel(reason)
+		Logger.warn("Cancelling trade:", tostring(reason))
 
-		if TradeState.waitForTradeOpen then
-			return TradeState.waitForTradeOpen(timeout)
+		pcall(function()
+			TradeActions.cancelTrade()
+		end)
+
+		task.wait(1)
+	end
+
+	local function failAttempt(reason)
+		Logger.warn("Trade attempt failed:", tostring(reason))
+		return false, reason
+	end
+
+	local function shouldRetry(reason)
+		local retryable = {
+			trade_open_timeout = true,
+			trade_closed = true,
+			buyer_ready_timeout = true,
+			buyer_confirm_timeout = true,
+			trade_closed_before_completed = true,
+			final_result_timeout = true,
+			send_trade_request_failed = true,
+			trade_request_failed = true,
+			local_ready_timeout = true,
+			local_confirm_timeout = true,
+			trade_canceled = true,
+			trade_reverted = true,
+		}
+
+		return retryable[tostring(reason)] == true
+	end
+
+	local function waitCountdownOrFail(config)
+		local timeout = cfgNumber(config, "TradeCountdownTimeout", 12)
+
+		if not TradeState.waitNoItemCountdown then
+			task.wait(4)
+			return true
 		end
 
-		if TradeState.waitOpen then
-			return TradeState.waitOpen(timeout)
+		local ok, reason = TradeState.waitNoItemCountdown(timeout)
+
+		if not ok then
+			return false, reason
 		end
 
-		if TradeState.waitForTrade then
-			return TradeState.waitForTrade(timeout)
-		end
-
-		task.wait(timeout)
 		return true
 	end
 
-	local function addItem(item)
-		if TradeActions.addItemToTrade then
-			return TradeActions.addItemToTrade(item)
+	local function addAndVerifyItem(config, item, localUserId, uuid)
+		local clearBeforeAdd = cfgBool(config, "TradeClearBeforeAdd", true)
+
+		if clearBeforeAdd and TradeActions.clearTradeContents then
+			TradeActions.clearTradeContents()
 		end
 
-		if TradeActions.addItem then
-			return TradeActions.addItem(item)
+		local addOk, addResult = TradeActions.addItemToTrade(item)
+
+		if not addOk then
+			return false, "add_item_failed:" .. tostring(addResult)
 		end
 
-		return false, "missing_add_item_function"
+		Logger.info("AddItemToTrade returned success. Verifying item appears in our offer...")
+
+		local verifyTimeout = cfgNumber(config, "TradeItemVerifyTimeout", 8)
+
+		if TradeState.waitItemInOffer then
+			local seenOk, seenReason = TradeState.waitItemInOffer(localUserId, uuid, verifyTimeout)
+
+			if not seenOk then
+				return false, seenReason
+			end
+		else
+			Logger.warn("TradeState.waitItemInOffer missing. Cannot verify item in offer.")
+			return false, "missing_item_offer_verification"
+		end
+
+		return true
 	end
 
-	local function readyUp()
-		if TradeActions.readyUp then
-			return TradeActions.readyUp()
+	local function readyAndVerify(config, localUserId)
+		local readyOk, readyResult = TradeActions.readyUp(true)
+
+		if not readyOk then
+			return false, "ready_failed:" .. tostring(readyResult)
 		end
 
-		if TradeActions.ready then
-			return TradeActions.ready()
+		Logger.info("ReadyUp(true) sent. Verifying local ready state...")
+
+		local timeout = cfgNumber(config, "TradeLocalReadyTimeout", 8)
+
+		if TradeState.waitLocalReady then
+			local ok, reason = TradeState.waitLocalReady(localUserId, timeout)
+
+			if not ok then
+				return false, reason
+			end
+		else
+			Logger.warn("TradeState.waitLocalReady missing.")
+			return false, "missing_local_ready_verification"
 		end
 
-		return false, "missing_ready_function"
+		Logger.info("Verified local ready.")
+		return true
 	end
 
-	local function confirmTrade()
-		if TradeActions.confirmTrade then
-			return TradeActions.confirmTrade()
+	local function waitBuyerReady(config, buyerUserId, localUserId, uuid)
+		local timeout = cfgNumber(config, "TradeBuyerReadyTimeout", 60)
+
+		if not TradeState.waitBuyerReady then
+			return false, "missing_buyer_ready_verification"
 		end
 
-		if TradeActions.confirm then
-			return TradeActions.confirm()
+		Logger.info("Waiting for buyer to ready. Timeout:", timeout)
+
+		local ok, reason = TradeState.waitBuyerReady(buyerUserId, localUserId, uuid, timeout)
+
+		if not ok then
+			return false, reason
 		end
 
-		return false, "missing_confirm_function"
+		Logger.info("Buyer ready verified.")
+		return true
 	end
 
-	local function cancelTrade()
-		if TradeActions.cancelTrade then
-			pcall(function()
-				TradeActions.cancelTrade()
-			end)
-		elseif TradeActions.cancel then
-			pcall(function()
-				TradeActions.cancel()
-			end)
+	local function confirmAndVerify(config, localUserId)
+		local autoConfirm = cfgBool(config, "TradeAutoConfirm", true)
+
+		if not autoConfirm then
+			Logger.warn("TradeAutoConfirm is false. Stopping before confirm.")
+			return false, "manual_confirm_required"
 		end
+
+		local confirmRetryTimeout = cfgNumber(config, "TradeConfirmRetryTimeout", 15)
+		local start = os.clock()
+		local lastReason = nil
+
+		Logger.info("Starting confirm loop. Timeout:", confirmRetryTimeout)
+
+		while os.clock() - start < confirmRetryTimeout do
+			local confirmOk, confirmResult = TradeActions.confirmTrade()
+
+			if confirmOk then
+				Logger.info("ConfirmTrade returned success. Verifying local confirm/processing...")
+
+				if TradeState.waitLocalConfirmed then
+					local ok, reason = TradeState.waitLocalConfirmed(localUserId, cfgNumber(config, "TradeLocalConfirmTimeout", 8))
+
+					if ok then
+						Logger.info("Local confirm/processing verified.")
+						return true
+					end
+
+					lastReason = reason
+					Logger.warn("Local confirm not verified yet:", tostring(reason))
+				else
+					return false, "missing_local_confirm_verification"
+				end
+			else
+				lastReason = confirmResult
+				Logger.warn("ConfirmTrade failed:", tostring(confirmResult))
+			end
+
+			task.wait(1)
+		end
+
+		return false, "confirm_timeout:" .. tostring(lastReason)
 	end
 
-	local function sendRequest(buyer)
-		if TradeActions.sendTradeRequest then
-			return TradeActions.sendTradeRequest(buyer)
+	local function waitBuyerConfirmOrProcessing(config, buyerUserId, localUserId, uuid)
+		local timeout = cfgNumber(config, "TradeBuyerConfirmTimeout", 60)
+
+		if not TradeState.waitBuyerConfirmedOrProcessing then
+			return false, "missing_buyer_confirm_verification"
 		end
 
-		if TradeActions.sendRequest then
-			return TradeActions.sendRequest(buyer)
+		Logger.info("Waiting for buyer confirm or processing. Timeout:", timeout)
+
+		local ok, reason = TradeState.waitBuyerConfirmedOrProcessing(buyerUserId, localUserId, uuid, timeout)
+
+		if not ok then
+			return false, reason
 		end
 
-		return false, "missing_send_request_function"
+		Logger.info("Buyer confirm/processing verified:", tostring(reason))
+		return true
+	end
+
+	local function waitFinalResult(config)
+		local timeout = cfgNumber(config, "TradeFinalTimeout", 30)
+
+		if not TradeState.waitFinalResult then
+			return false, "missing_final_result_verification"
+		end
+
+		Logger.info("Waiting for final trade result. Timeout:", timeout)
+
+		local ok, reason = TradeState.waitFinalResult(timeout)
+
+		if not ok then
+			return false, reason
+		end
+
+		Logger.info("Final trade result verified:", tostring(reason))
+		return true
+	end
+
+	local function runSingleAttempt(config, buyer, item, uuid)
+		if TradeState.resetStatus then
+			TradeState.resetStatus()
+		end
+
+		local localUserId = tostring(game:GetService("Players").LocalPlayer.UserId)
+		local buyerUserId = getUserIdString(buyer)
+
+		if not buyerUserId then
+			return false, "missing_buyer_user_id"
+		end
+
+		Logger.info("Security check:")
+		Logger.info("  LocalUserId =", localUserId)
+		Logger.info("  BuyerUserId =", buyerUserId)
+		Logger.info("  Item UUID =", uuid)
+
+		local requestOk, requestResult = TradeActions.sendTradeRequest(buyer)
+
+		if not requestOk then
+			return false, "trade_request_failed:" .. tostring(requestResult)
+		end
+
+		Logger.info("Trade request sent. Waiting for real trade replion...")
+
+		local openTimeout = cfgNumber(config, "TradeOpenTimeout", 15)
+		local openOk, openReason = TradeState.waitForTradeOpen(buyer, openTimeout)
+
+		if not openOk then
+			return false, openReason
+		end
+
+		Logger.info("Real trade opened for correct buyer:", tostring(openReason))
+
+		local addOk, addReason = addAndVerifyItem(config, item, localUserId, uuid)
+
+		if not addOk then
+			return false, addReason
+		end
+
+		Logger.info("Item added and verified.")
+
+		local countdownOk, countdownReason = waitCountdownOrFail(config)
+
+		if not countdownOk then
+			return false, countdownReason
+		end
+
+		local readyOk, readyReason = readyAndVerify(config, localUserId)
+
+		if not readyOk then
+			return false, readyReason
+		end
+
+		local buyerReadyOk, buyerReadyReason = waitBuyerReady(config, buyerUserId, localUserId, uuid)
+
+		if not buyerReadyOk then
+			return false, buyerReadyReason
+		end
+
+		if TradeState.offerContainsItem and not TradeState.offerContainsItem(localUserId, uuid) then
+			return false, "our_item_missing_before_confirm"
+		end
+
+		local countdownOk2, countdownReason2 = waitCountdownOrFail(config)
+
+		if not countdownOk2 then
+			return false, countdownReason2
+		end
+
+		if TradeState.offerContainsItem and not TradeState.offerContainsItem(localUserId, uuid) then
+			return false, "our_item_missing_after_countdown"
+		end
+
+		local confirmOk, confirmReason = confirmAndVerify(config, localUserId)
+
+		if not confirmOk then
+			return false, confirmReason
+		end
+
+		local buyerConfirmOk, buyerConfirmReason = waitBuyerConfirmOrProcessing(config, buyerUserId, localUserId, uuid)
+
+		if not buyerConfirmOk then
+			return false, buyerConfirmReason
+		end
+
+		local finalOk, finalReason = waitFinalResult(config)
+
+		if not finalOk then
+			return false, finalReason
+		end
+
+		return true, "trade_complete"
 	end
 
 	function TradeMain.Start()
 		local config = getConfig()
 
-		Logger.info("Starting trade delivery.")
+		Logger.info("Starting secure trade delivery.")
 
 		if not config.BuyerName or config.BuyerName == "" then
 			return false, "missing_buyer_name"
@@ -128,21 +402,21 @@ return function(ctx)
 			return false, "missing_item_type"
 		end
 
-		local buyer = PlayersUtil.findPlayer(config.BuyerName)
+		local buyer, buyerReason = findBuyer(config)
 
 		if not buyer then
-			return false, "buyer_not_found"
+			return false, buyerReason
 		end
 
 		Logger.info("Buyer found:", buyer.Name, buyer.UserId)
 
-		local cooldown = tonumber(config.TradeJoinCooldown or 10) or 10
+		local joinCooldown = cfgNumber(config, "TradeJoinCooldown", 30)
 
-		if cooldown > 0 then
-			Logger.info("Waiting", cooldown, "seconds before sending trade request because of join cooldown.")
-			task.wait(cooldown)
+		if joinCooldown > 0 then
+			Logger.info("Waiting", joinCooldown, "seconds before sending trade request because of join cooldown.")
+			task.wait(joinCooldown)
 
-			buyer = PlayersUtil.findPlayer(config.BuyerName)
+			buyer, buyerReason = findBuyer(config)
 
 			if not buyer then
 				return false, "buyer_left_during_join_cooldown"
@@ -157,96 +431,52 @@ return function(ctx)
 			return false, "item_not_found"
 		end
 
-		local retries = tonumber(config.TradeRequestRetries or 5) or 5
-		local retryDelay = tonumber(config.TradeRequestRetryDelay or 3) or 3
-		local openTimeout = tonumber(config.TradeOpenTimeout or 12) or 12
+		local uuid = getItemUuid(item)
+
+		if not uuid then
+			return false, "item_uuid_missing"
+		end
+
+		Logger.info("Selected item for secure trade:", tostring(uuid))
+
+		local retries = cfgNumber(config, "TradeRequestRetries", 5)
+		local retryDelay = cfgNumber(config, "TradeRequestRetryDelay", 3)
+
+		local lastReason = "unknown"
 
 		for attempt = 1, retries do
-			Logger.info("Trade attempt", attempt, "/", retries)
+			Logger.info("Secure trade attempt", attempt, "/", retries)
 
-			buyer = waitBuyerStillHere(config.BuyerName)
+			buyer, buyerReason = findBuyer(config)
 
 			if not buyer then
 				return false, "buyer_left_before_trade_request"
 			end
 
-			local requestOk, requestResult = sendRequest(buyer)
+			local ok, reason = runSingleAttempt(config, buyer, item, uuid)
 
-			if not requestOk then
-				Logger.warn("Trade request failed:", tostring(requestResult))
-
-				if attempt < retries then
-					Logger.info("Retrying trade request in", retryDelay, "seconds...")
-					task.wait(retryDelay)
-				end
-
-				continue
+			if ok then
+				Logger.info("Secure trade delivery finished successfully.")
+				return true, "trade_complete"
 			end
 
-			Logger.info("Trade request sent. Waiting for trade window/open state...")
+			lastReason = reason
+			Logger.warn("Secure trade attempt failed:", tostring(reason))
 
-			local openOk, openResult = waitForTradeOpen(openTimeout)
+			safeCancel(reason)
 
-			if not openOk then
-				Logger.warn("Trade window did not open or request was declined:", tostring(openResult))
-
-				cancelTrade()
-
-				if attempt < retries then
-					Logger.info("Resending trade request in", retryDelay, "seconds...")
-					task.wait(retryDelay)
-				end
-
-				continue
+			if not shouldRetry(reason) then
+				Logger.warn("Failure is not retryable:", tostring(reason))
+				return false, reason
 			end
 
-			Logger.info("Trade window opened.")
-
-			local addOk, addResult = addItem(item)
-
-			if not addOk then
-				Logger.warn("Add item failed:", tostring(addResult))
-				cancelTrade()
-				return false, "add_item_failed"
+			if attempt < retries then
+				Logger.info("Retrying secure trade in", retryDelay, "seconds...")
+				task.wait(retryDelay)
 			end
-
-			Logger.info("Item added to trade.")
-
-			local readyOk, readyResult = readyUp()
-
-			if not readyOk then
-				Logger.warn("Ready failed:", tostring(readyResult))
-				cancelTrade()
-				return false, "ready_failed"
-			end
-
-			Logger.info("Ready sent.")
-
-			local confirmWait = tonumber(config.TradeConfirmDelay or 6) or 6
-			Logger.info("Waiting", confirmWait, "seconds before confirm.")
-			task.wait(confirmWait)
-
-			local confirmOk, confirmResult = confirmTrade()
-
-			if not confirmOk then
-				Logger.warn("Confirm failed:", tostring(confirmResult))
-				cancelTrade()
-
-				if attempt < retries then
-					Logger.info("Trade failed/closed. Retrying in", retryDelay, "seconds...")
-					task.wait(retryDelay)
-				end
-
-				continue
-			end
-
-			Logger.info("Confirm sent.")
-			Logger.info("Trade delivery finished successfully.")
-
-			return true, "trade_complete"
 		end
 
-		return false, "trade_request_declined_or_not_accepted"
+		return false, lastReason
 	end
 
 	return TradeMain
