@@ -129,6 +129,8 @@ return function(ctx)
 
 	local function shouldRetry(reason)
 		local retryable = {
+			buyer_join_timeout = true,
+			buyer_not_found = true,
 			trade_open_timeout = true,
 			trade_closed = true,
 			buyer_ready_timeout = true,
