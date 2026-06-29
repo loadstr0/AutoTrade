@@ -15,6 +15,7 @@ local FILES = {
 	"TradeActions",
 	"TradeMain",
 	"Main",
+	"BridgeWatcher",
 }
 
 local HttpService = game:GetService("HttpService")
@@ -27,7 +28,18 @@ local function httpGet(url)
 	return HttpService:GetAsync(url)
 end
 
-local function loadBridgeFromWorkspace()
+local ctx = {
+	Base = BASE,
+	Bridge = nil,
+	Modules = {},
+	Services = {
+		Players = game:GetService("Players"),
+		ReplicatedStorage = game:GetService("ReplicatedStorage"),
+		HttpService = HttpService,
+	},
+}
+
+local function loadBridgeOnce()
 	if getgenv().AutoTradeBridge then
 		print("[AutoTradeLoader] Using existing getgenv().AutoTradeBridge")
 		return getgenv().AutoTradeBridge
@@ -58,7 +70,6 @@ local function loadBridgeFromWorkspace()
 
 	if not okDecode then
 		warn("[AutoTradeLoader] Failed to JSONDecode bridge file:", data)
-		warn("[AutoTradeLoader] File content was:", source)
 		return {}
 	end
 
@@ -67,19 +78,6 @@ local function loadBridgeFromWorkspace()
 
 	return data
 end
-
-local ctx = {
-	Base = BASE,
-	Bridge = nil,
-	Modules = {},
-	Services = {
-		Players = game:GetService("Players"),
-		ReplicatedStorage = game:GetService("ReplicatedStorage"),
-		HttpService = HttpService,
-	},
-}
-
-ctx.Bridge = loadBridgeFromWorkspace()
 
 local function loadRemote(name)
 	local url = BASE .. name .. ".lua"
@@ -98,8 +96,6 @@ local function loadRemote(name)
 		error("[AutoTradeLoader] Failed to run chunk " .. name .. ": " .. tostring(result))
 	end
 
-	-- Our files return function(ctx) ... return Module end
-	-- So if result is a function, call it with ctx to get the actual module table.
 	if type(result) == "function" then
 		local okFactory, module = pcall(result, ctx)
 
@@ -122,12 +118,9 @@ for _, name in ipairs(FILES) do
 	ctx.Modules[name] = loadRemote(name)
 end
 
-if type(ctx.Modules.Main) ~= "table" then
-	error("[AutoTradeLoader] Main module is not a table. Got: " .. typeof(ctx.Modules.Main))
+if getgenv().AutoTradeWatch == true then
+	ctx.Modules.BridgeWatcher.Start()
+else
+	ctx.Bridge = loadBridgeOnce()
+	ctx.Modules.Main.Start(ctx)
 end
-
-if type(ctx.Modules.Main.Start) ~= "function" then
-	error("[AutoTradeLoader] Main.Start is missing.")
-end
-
-ctx.Modules.Main.Start(ctx)
