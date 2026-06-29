@@ -38,7 +38,6 @@ return function(ctx)
 
 		raw = tostring(raw or "")
 
-		-- Empty file = no job yet.
 		if not hasText(raw) then
 			return nil, "idle_empty"
 		end
@@ -55,12 +54,19 @@ return function(ctx)
 			return nil, "json_not_table"
 		end
 
-		-- Empty JSON object {} = no job yet.
 		if next(data) == nil then
 			return nil, "idle_empty_object"
 		end
 
 		return data, nil
+	end
+
+	local function extractJobs(data)
+		if type(data.Jobs) == "table" then
+			return data.Jobs
+		end
+
+		return { data }
 	end
 
 	local function getBridgeId(bridge)
@@ -84,6 +90,10 @@ return function(ctx)
 	end
 
 	local function isValidBridge(bridge)
+		if type(bridge) ~= "table" then
+			return false, "bridge_not_table"
+		end
+
 		if not bridge.BuyerName or bridge.BuyerName == "" then
 			return false, "missing BuyerName"
 		end
@@ -133,6 +143,10 @@ return function(ctx)
 		busy = true
 		processed[bridgeId] = true
 
+		if Logger.clear then
+			Logger.clear()
+		end
+
 		Logger.info("New bridge detected:", bridgeId)
 
 		ctx.Bridge = bridge
@@ -164,13 +178,21 @@ return function(ctx)
 		Logger.info("Poll seconds:", POLL_SECONDS)
 
 		while getgenv().AutoTradeStop ~= true do
-			local bridge, err = readBridgeFile()
+			local data, err = readBridgeFile()
 
-			if bridge then
+			if data then
 				lastIdleReason = nil
-				runBridge(bridge)
+
+				local jobs = extractJobs(data)
+
+				for _, bridge in ipairs(jobs) do
+					if getgenv().AutoTradeStop == true then
+						break
+					end
+
+					runBridge(bridge)
+				end
 			else
-				-- These are normal idle states. Do not spam warnings.
 				if err == "missing" or err == "idle_empty" or err == "idle_empty_object" or err == "idle_invalid_json" then
 					if lastIdleReason ~= err then
 						Logger.info("Waiting for bridge file job:", err)
