@@ -52,6 +52,14 @@ return function(ctx)
 		end
 	end
 
+	function Logger.clear()
+		table.clear(Logger.Buffer)
+	
+		if getgenv().AutoTradeClearConsole == true and typeof(rconsoleclear) == "function" then
+			pcall(rconsoleclear)
+		end
+	end
+
 	function Logger.writeResult(success, reason, extra)
 		extra = extra or {}
 
