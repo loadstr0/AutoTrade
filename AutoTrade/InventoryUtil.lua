@@ -11,14 +11,9 @@ return function(ctx)
 	local LocalPlayer = Players.LocalPlayer
 
 	local InventoryClient = nil
-	local InventoryShared = nil
 
 	pcall(function()
 		InventoryClient = require(ReplicatedStorage.Shared.Inventory.Client)
-	end)
-
-	pcall(function()
-		InventoryShared = require(ReplicatedStorage.Shared.Inventory.Shared)
 	end)
 
 	local function clean(text)
@@ -27,30 +22,39 @@ return function(ctx)
 		return text
 	end
 
-	local function lower(text)
-		return clean(text):lower()
-	end
-
 	local function makeNameKey(itemName)
-		-- This matches the known Blade Ball item key format:
-		-- [["Name","Dune Cleaver"]]
 		return HttpService:JSONEncode({
 			{ "Name", itemName }
 		})
 	end
 
-	local function callFindItemsWithKey(module, player, itemType, itemKey)
-		if not module then
-			return {}
+	local function call(label, fn)
+		local ok, result = pcall(fn)
+
+		if ok then
+			return true, result
+		end
+
+		Logger.warn(label, "failed:", result)
+		return false, nil
+	end
+
+	local function getInventory()
+		if not InventoryClient then
+			return nil
 		end
 
 		local attempts = {
 			function()
-				return module:FindItemsWithKey(player, itemType, itemKey)
+				return InventoryClient.GetInventory(LocalPlayer)
 			end,
 
 			function()
-				return module.FindItemsWithKey(player, itemType, itemKey)
+				return InventoryClient.Get(LocalPlayer)
+			end,
+
+			function()
+				return InventoryClient:GetInventory(LocalPlayer)
 			end,
 		}
 
@@ -59,101 +63,170 @@ return function(ctx)
 
 			if ok and type(result) == "table" then
 				return result
-			end
-		end
-
-		return {}
-	end
-
-	local function callFindItems(module, player, itemType, itemName)
-		if not module then
-			return {}
-		end
-
-		local function predicate(item)
-			if type(item) ~= "table" then
-				return false
-			end
-
-			local name =
-				item.Name
-				or item.name
-				or item.DisplayName
-				or item.displayName
-
-			if not name then
-				return false
-			end
-
-			name = lower(name)
-			local wanted = lower(itemName)
-
-			return name == wanted or name:find(wanted, 1, true) ~= nil
-		end
-
-		local attempts = {
-			function()
-				return module:FindItems(player, itemType, predicate)
-			end,
-
-			function()
-				return module.FindItems(player, itemType, predicate)
-			end,
-		}
-
-		for _, fn in ipairs(attempts) do
-			local ok, result = pcall(fn)
-
-			if ok and type(result) == "table" then
-				return result
-			end
-		end
-
-		return {}
-	end
-
-	local function isTradable(item)
-		if type(item) ~= "table" then
-			return false
-		end
-
-		if item.TradeLock == true then
-			return false
-		end
-
-		if item.tradeLock == true then
-			return false
-		end
-
-		return true
-	end
-
-	local function firstTradable(items)
-		for _, item in ipairs(items) do
-			if isTradable(item) then
-				return item
 			end
 		end
 
 		return nil
 	end
 
-	local function debugListInventory(itemType)
-		Logger.warn("Could not find item. Printing small inventory debug list...")
+	local function getInventoryItem(itemType, uuid)
+		local inventory = getInventory()
 
-		local inventory = nil
-
-		if InventoryClient then
-			pcall(function()
-				inventory = InventoryClient:Get(LocalPlayer)
-			end)
+		if type(inventory) ~= "table" then
+			return nil
 		end
 
-		if not inventory and InventoryShared then
-			pcall(function()
-				inventory = InventoryShared:Get(LocalPlayer)
-			end)
+		local bucket = inventory[itemType]
+
+		if type(bucket) ~= "table" then
+			return nil
 		end
+
+		return bucket[uuid]
+	end
+
+	local function isTradable(rawItem)
+		if type(rawItem) ~= "table" then
+			return true
+		end
+
+		if rawItem.TradeLock == true then
+			return false
+		end
+
+		if rawItem.tradeLock == true then
+			return false
+		end
+
+		if rawItem.Locked == true then
+			return false
+		end
+
+		if rawItem.locked == true then
+			return false
+		end
+
+		return true
+	end
+
+	local function collectUuidsFromResult(result, out)
+		if type(result) ~= "table" then
+			return
+		end
+
+		for _, value in pairs(result) do
+			if type(value) == "string" then
+				table.insert(out, value)
+			elseif type(value) == "table" then
+				local uuid =
+					value.UUID
+					or value.uuid
+					or value.Id
+					or value.id
+					or value.ItemId
+					or value.itemId
+
+				if uuid then
+					table.insert(out, tostring(uuid))
+				end
+			end
+		end
+	end
+
+	local function findUuidsWithKey(itemType, itemName)
+		local uuids = {}
+
+		if not InventoryClient or type(InventoryClient.FindItemsWithKey) ~= "function" then
+			return uuids
+		end
+
+		local itemKey = makeNameKey(itemName)
+
+		Logger.info("Item key:", itemKey)
+
+		-- IMPORTANT:
+		-- In your diagnostic, this one worked:
+		-- InventoryClient.FindItemsWithKey(LocalPlayer, "Sword", key)
+		local attempts = {
+			{
+				name = "dot player/type/key",
+				fn = function()
+					return InventoryClient.FindItemsWithKey(LocalPlayer, itemType, itemKey)
+				end,
+			},
+
+			{
+				name = "colon player/type/key",
+				fn = function()
+					return InventoryClient:FindItemsWithKey(LocalPlayer, itemType, itemKey)
+				end,
+			},
+		}
+
+		for _, attempt in ipairs(attempts) do
+			local ok, result = call("FindItemsWithKey " .. attempt.name, attempt.fn)
+
+			if ok then
+				collectUuidsFromResult(result, uuids)
+			end
+		end
+
+		return uuids
+	end
+
+	local function findUuidsFallback(itemType, itemName)
+		local uuids = {}
+		local inventory = getInventory()
+
+		if type(inventory) ~= "table" then
+			Logger.warn("Could not read inventory table.")
+			return uuids
+		end
+
+		local bucket = inventory[itemType]
+
+		if type(bucket) ~= "table" then
+			Logger.warn("Inventory has no bucket:", itemType)
+			return uuids
+		end
+
+		local wanted = clean(itemName):lower()
+
+		for uuid, rawItem in pairs(bucket) do
+			local matched = false
+
+			if type(rawItem) == "table" then
+				local name =
+					rawItem.Name
+					or rawItem.name
+					or rawItem.DisplayName
+					or rawItem.displayName
+
+				if name and tostring(name):lower() == wanted then
+					matched = true
+				end
+
+				if not matched and InventoryClient and type(InventoryClient.ItemToString) == "function" then
+					local ok, itemString = pcall(function()
+						return InventoryClient.ItemToString(rawItem)
+					end)
+
+					if ok and tostring(itemString):lower():find(wanted, 1, true) then
+						matched = true
+					end
+				end
+			end
+
+			if matched then
+				table.insert(uuids, tostring(uuid))
+			end
+		end
+
+		return uuids
+	end
+
+	local function debugInventory(itemType)
+		local inventory = getInventory()
 
 		if type(inventory) ~= "table" then
 			Logger.warn("Could not read inventory table.")
@@ -163,26 +236,27 @@ return function(ctx)
 		local bucket = inventory[itemType]
 
 		if type(bucket) ~= "table" then
-			Logger.warn("Inventory has no bucket for itemType:", itemType)
+			Logger.warn("Inventory has no bucket:", itemType)
 			return
 		end
 
 		local count = 0
 
-		for id, item in pairs(bucket) do
+		for uuid, rawItem in pairs(bucket) do
 			count += 1
 
 			if count <= 25 then
-				local name =
-					type(item) == "table"
-					and (item.Name or item.name or item.DisplayName or item.displayName)
-					or "?"
+				local extra = ""
 
-				Logger.warn("Inventory item:", tostring(id), tostring(name))
+				if type(rawItem) == "table" then
+					extra = tostring(rawItem.Name or rawItem.DisplayName or rawItem.name or rawItem.displayName or "")
+				end
+
+				Logger.warn("Inventory item:", tostring(uuid), extra)
 			end
 		end
 
-		Logger.warn("Total items in bucket", itemType, "=", count)
+		Logger.warn("Total inventory items in", itemType, "=", count)
 	end
 
 	function InventoryUtil.findTradableItem(itemType, itemName)
@@ -191,55 +265,38 @@ return function(ctx)
 
 		Logger.info("Searching inventory:", itemType, itemName)
 
-		if itemName == "" then
-			Logger.warn("Empty itemName.")
+		if itemType == "" or itemName == "" then
+			Logger.warn("Missing itemType/itemName.")
 			return nil
 		end
 
-		local itemKey = makeNameKey(itemName)
-		Logger.info("Item key:", itemKey)
+		local uuids = findUuidsWithKey(itemType, itemName)
 
-		-- Best path: use FindItemsWithKey, same style as the actual trade UI.
-		local matches = {}
+		Logger.info("FindItemsWithKey UUID matches:", #uuids)
 
-		for _, module in ipairs({ InventoryShared, InventoryClient }) do
-			local result = callFindItemsWithKey(module, LocalPlayer, itemType, itemKey)
+		if #uuids == 0 then
+			uuids = findUuidsFallback(itemType, itemName)
+			Logger.info("Fallback UUID matches:", #uuids)
+		end
 
-			for _, item in ipairs(result) do
-				table.insert(matches, item)
+		for _, uuid in ipairs(uuids) do
+			local rawItem = getInventoryItem(itemType, uuid)
+
+			if isTradable(rawItem) then
+				Logger.info("Selected inventory UUID:", uuid)
+
+				return {
+					UUID = uuid,
+					ItemType = itemType,
+					ItemName = itemName,
+					RawItem = rawItem,
+				}
+			else
+				Logger.warn("Skipping locked/untradable UUID:", uuid)
 			end
 		end
 
-		Logger.info("FindItemsWithKey matches:", #matches)
-
-		local selected = firstTradable(matches)
-
-		if selected then
-			Logger.info("Selected item from FindItemsWithKey:", selected.Name or selected.name or selected.DisplayName or "?")
-			return selected
-		end
-
-		-- Fallback: try FindItems predicate search.
-		local fallbackMatches = {}
-
-		for _, module in ipairs({ InventoryShared, InventoryClient }) do
-			local result = callFindItems(module, LocalPlayer, itemType, itemName)
-
-			for _, item in ipairs(result) do
-				table.insert(fallbackMatches, item)
-			end
-		end
-
-		Logger.info("FindItems fallback matches:", #fallbackMatches)
-
-		selected = firstTradable(fallbackMatches)
-
-		if selected then
-			Logger.info("Selected item from fallback:", selected.Name or selected.name or selected.DisplayName or "?")
-			return selected
-		end
-
-		debugListInventory(itemType)
+		debugInventory(itemType)
 
 		return nil
 	end
