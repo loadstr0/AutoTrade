@@ -63,6 +63,10 @@ return function(ctx)
 	Config.TradeRequestRetryDelay = 3
 	Config.TradeOpenTimeout = 12
 
+	-- IMPORTANT: keep this false until we have proper final-state checks.
+	Config.TradeAutoConfirm = false
+	Config.RequireManualConfirm = true
+
 	local function applyBool(fieldName, bridge, ...)
 		local keys = { ... }
 
