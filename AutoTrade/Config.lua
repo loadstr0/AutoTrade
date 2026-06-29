@@ -62,7 +62,6 @@ return function(ctx)
 	Config.TradeRequestRetries = 5
 	Config.TradeRequestRetryDelay = 3
 	Config.TradeOpenTimeout = 12
-	Config.TradeJoinCooldown = 10
 
 	local function applyBool(fieldName, bridge, ...)
 		local keys = { ... }
