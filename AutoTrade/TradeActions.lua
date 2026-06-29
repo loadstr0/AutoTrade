@@ -17,7 +17,7 @@ return function(ctx)
 
 		local args = { ... }
 
-		local ok, result = pcall(function()
+		local ok, result1, result2, result3 = pcall(function()
 			if remote:IsA("RemoteFunction") then
 				return remote:InvokeServer(table.unpack(args))
 			else
@@ -27,36 +27,17 @@ return function(ctx)
 		end)
 
 		if not ok then
-			Logger.warn(label, "error:", result)
-			return false, result
+			Logger.warn(label, "error:", result1)
+			return false, result1
 		end
 
-		Logger.info(label, "=>", tostring(result))
+		Logger.info(label, "=>", tostring(result1), tostring(result2 or ""))
 
-		if result == false then
-			return false, result
+		if result1 == false then
+			return false, result2 or result1
 		end
 
-		return true, result
-	end
-
-	local function openTradeUiState()
-		if not Remotes.SetUIOpen then
-			Logger.warn("SetUIOpen remote missing, skipping.")
-			return
-		end
-
-		Logger.info("Opening trade UI state before request...")
-
-		pcall(function()
-			if Remotes.SetUIOpen:IsA("RemoteFunction") then
-				Remotes.SetUIOpen:InvokeServer(true)
-			else
-				Remotes.SetUIOpen:FireServer(true)
-			end
-		end)
-
-		task.wait(0.75)
+		return true, result1, result2, result3
 	end
 
 	local function getUuid(item)
@@ -87,9 +68,32 @@ return function(ctx)
 		return nil
 	end
 
+	local function openTradeUiState()
+		if not Remotes.SetUIOpen then
+			Logger.warn("SetUIOpen remote missing, skipping.")
+			return
+		end
+
+		Logger.info("Opening trade UI state before request...")
+
+		pcall(function()
+			if Remotes.SetUIOpen:IsA("RemoteFunction") then
+				Remotes.SetUIOpen:InvokeServer(true)
+			else
+				Remotes.SetUIOpen:FireServer(true)
+			end
+		end)
+
+		task.wait(0.75)
+	end
+
 	function TradeActions.sendTradeRequest(buyer)
 		if not buyer then
 			return false, "missing_buyer"
+		end
+
+		if not Remotes.SendTradeRequest then
+			return false, "missing_SendTradeRequest_remote"
 		end
 
 		local userId = buyer.UserId
@@ -185,74 +189,104 @@ return function(ctx)
 			return false, "missing_item_uuid"
 		end
 
-		Logger.info("Adding item to trade:")
+		if not itemType then
+			return false, "missing_item_type"
+		end
+
+		if not Remotes.AddItemToTrade then
+			return false, "missing_AddItemToTrade_remote"
+		end
+
+		Logger.info("Adding item to trade exactly like UI:")
+		Logger.info("  Type =", itemType)
 		Logger.info("  UUID =", uuid)
-		Logger.info("  Type =", tostring(itemType))
 
-		local attempts = {}
-
-		if itemType then
-			table.insert(attempts, {
-				name = "AddItemToTrade itemType/uuid",
-				fn = function()
-					return invoke("AddItemToTrade itemType/uuid", Remotes.AddItemToTrade, itemType, uuid)
-				end,
-			})
-
-			table.insert(attempts, {
-				name = "AddItemToTrade uuid/itemType",
-				fn = function()
-					return invoke("AddItemToTrade uuid/itemType", Remotes.AddItemToTrade, uuid, itemType)
-				end,
-			})
-		end
-
-		table.insert(attempts, {
-			name = "AddItemToTrade uuid",
-			fn = function()
-				return invoke("AddItemToTrade uuid", Remotes.AddItemToTrade, uuid)
-			end,
-		})
-
-		table.insert(attempts, {
-			name = "AddItemToTrade table",
-			fn = function()
-				return invoke("AddItemToTrade table", Remotes.AddItemToTrade, {
-					UUID = uuid,
-					ItemType = itemType,
-				})
-			end,
-		})
-
-		for _, attempt in ipairs(attempts) do
-			Logger.info("Trying", attempt.name)
-
-			local ok, result = attempt.fn()
-
-			if ok then
-				Logger.info("AddItemToTrade worked with:", attempt.name)
-				return true, result
-			end
-
-			task.wait(0.5)
-		end
-
-		return false, "add_item_failed"
+		return invoke("AddItemToTrade itemType/uuid", Remotes.AddItemToTrade, itemType, uuid)
 	end
 
-	function TradeActions.readyUp()
-		return invoke("ReadyUp", Remotes.ReadyUp)
+	function TradeActions.removeItemFromTrade(item)
+		local uuid = getUuid(item)
+		local itemType = getItemType(item)
+
+		if not uuid then
+			return false, "missing_item_uuid"
+		end
+
+		if not itemType then
+			return false, "missing_item_type"
+		end
+
+		if not Remotes.RemoveItemFromTrade then
+			return false, "missing_RemoveItemFromTrade_remote"
+		end
+
+		return invoke("RemoveItemFromTrade itemType/uuid", Remotes.RemoveItemFromTrade, itemType, uuid)
+	end
+
+	function TradeActions.clearItems()
+		if Remotes.ClearItemsFromTrade then
+			return invoke("ClearItemsFromTrade", Remotes.ClearItemsFromTrade)
+		end
+
+		return true, "no_clear_remote"
+	end
+
+	function TradeActions.clearTokens()
+		if Remotes.AddTokensToTrade then
+			return invoke("AddTokensToTrade 0", Remotes.AddTokensToTrade, 0)
+		end
+
+		return true, "no_tokens_remote"
+	end
+
+	function TradeActions.clearTradeContents()
+		Logger.info("Clearing trade contents before adding item.")
+
+		pcall(function()
+			TradeActions.clearTokens()
+		end)
+
+		pcall(function()
+			TradeActions.clearItems()
+		end)
+
+		task.wait(0.5)
+
+		return true
+	end
+
+	function TradeActions.readyUp(value)
+		if value == nil then
+			value = true
+		end
+
+		if not Remotes.ReadyUp then
+			return false, "missing_ReadyUp_remote"
+		end
+
+		return invoke("ReadyUp", Remotes.ReadyUp, value)
+	end
+
+	function TradeActions.unready()
+		return TradeActions.readyUp(false)
 	end
 
 	function TradeActions.confirmTrade()
+		if not Remotes.ConfirmTrade then
+			return false, "missing_ConfirmTrade_remote"
+		end
+
 		return invoke("ConfirmTrade", Remotes.ConfirmTrade)
 	end
 
 	function TradeActions.cancelTrade()
+		if not Remotes.CancelTrade then
+			return false, "missing_CancelTrade_remote"
+		end
+
 		return invoke("CancelTrade", Remotes.CancelTrade)
 	end
 
-	-- Aliases for older TradeMain versions.
 	TradeActions.sendRequest = TradeActions.sendTradeRequest
 	TradeActions.addItem = TradeActions.addItemToTrade
 	TradeActions.ready = TradeActions.readyUp
