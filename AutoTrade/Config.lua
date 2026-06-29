@@ -57,7 +57,7 @@ return function(ctx)
 	Config.MaxGiftAttempts = 1
 	Config.GiftRetryDelay = 1
 
-	Config.TradeJoinCooldown = 12
+	Config.TradeJoinCooldown = 20
 
 	local function applyBool(fieldName, bridge, ...)
 		local keys = { ... }
