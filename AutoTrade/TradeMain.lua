@@ -70,15 +70,46 @@ return function(ctx)
 
 		return nil
 	end
-
+	
 	local function findBuyer(config)
 		local buyer = PlayersUtil.findPlayer(config.BuyerName)
-
+	
 		if not buyer then
 			return nil, "buyer_not_found"
 		end
-
+	
 		return buyer
+	end
+	
+	local function waitForBuyer(config)
+		local timeout = cfgNumber(config, "TradeBuyerJoinTimeout", 300)
+		local pollSeconds = cfgNumber(config, "TradeBuyerJoinPollSeconds", 2)
+	
+		Logger.info("Waiting for buyer to join server:")
+		Logger.info("  BuyerName =", tostring(config.BuyerName))
+		Logger.info("  Timeout =", timeout)
+	
+		local start = os.clock()
+		local lastLog = 0
+	
+		while os.clock() - start < timeout do
+			local buyer = PlayersUtil.findPlayer(config.BuyerName)
+	
+			if buyer then
+				Logger.info("Buyer joined/found:", buyer.Name, buyer.UserId)
+				return buyer
+			end
+	
+			if os.clock() - lastLog >= 10 then
+				local left = math.max(0, math.floor(timeout - (os.clock() - start)))
+				Logger.info("Still waiting for buyer to join...", left, "seconds left")
+				lastLog = os.clock()
+			end
+	
+			task.wait(pollSeconds)
+		end
+	
+		return nil, "buyer_join_timeout"
 	end
 
 	local function safeCancel(reason)
@@ -402,12 +433,12 @@ return function(ctx)
 			return false, "missing_item_type"
 		end
 
-		local buyer, buyerReason = findBuyer(config)
-
+		local buyer, buyerReason = waitForBuyer(config)
+		
 		if not buyer then
 			return false, buyerReason
 		end
-
+		
 		Logger.info("Buyer found:", buyer.Name, buyer.UserId)
 
 		local joinCooldown = cfgNumber(config, "TradeJoinCooldown", 30)
@@ -417,9 +448,14 @@ return function(ctx)
 			task.wait(joinCooldown)
 
 			buyer, buyerReason = findBuyer(config)
-
+			
 			if not buyer then
-				return false, "buyer_left_during_join_cooldown"
+				Logger.warn("Buyer left during join cooldown. Waiting again...")
+				buyer, buyerReason = waitForBuyer(config)
+			
+				if not buyer then
+					return false, "buyer_left_during_join_cooldown"
+				end
 			end
 
 			Logger.info("Buyer still in server after cooldown:", buyer.Name, buyer.UserId)
