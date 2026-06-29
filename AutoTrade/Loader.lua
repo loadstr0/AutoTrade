@@ -38,13 +38,7 @@ local function loadBridgeFromWorkspace()
 		return {}
 	end
 
-	local exists = true
-
-	if typeof(isfile) == "function" then
-		exists = isfile(BRIDGE_FILE)
-	end
-
-	if not exists then
+	if typeof(isfile) == "function" and not isfile(BRIDGE_FILE) then
 		warn("[AutoTradeLoader] Bridge file not found:", BRIDGE_FILE)
 		return {}
 	end
@@ -74,30 +68,9 @@ local function loadBridgeFromWorkspace()
 	return data
 end
 
-local function loadRemote(name, ctx)
-	local url = BASE .. name .. ".lua"
-	print("[AutoTradeLoader] Loading", name, url)
-
-	local source = httpGet(url)
-	local chunk, err = loadstring(source)
-
-	if not chunk then
-		error("[AutoTradeLoader] Failed to compile " .. name .. ": " .. tostring(err))
-	end
-
-	local ok, result = pcall(chunk, ctx)
-
-	if not ok then
-		error("[AutoTradeLoader] Failed to run " .. name .. ": " .. tostring(result))
-	end
-
-	print("[AutoTradeLoader] Loaded", name)
-	return result
-end
-
 local ctx = {
 	Base = BASE,
-	Bridge = loadBridgeFromWorkspace(),
+	Bridge = nil,
 	Modules = {},
 	Services = {
 		Players = game:GetService("Players"),
@@ -106,8 +79,55 @@ local ctx = {
 	},
 }
 
+ctx.Bridge = loadBridgeFromWorkspace()
+
+local function loadRemote(name)
+	local url = BASE .. name .. ".lua"
+	print("[AutoTradeLoader] Loading", name, url)
+
+	local source = httpGet(url)
+	local chunk, compileErr = loadstring(source)
+
+	if not chunk then
+		error("[AutoTradeLoader] Failed to compile " .. name .. ": " .. tostring(compileErr))
+	end
+
+	local okRun, result = pcall(chunk)
+
+	if not okRun then
+		error("[AutoTradeLoader] Failed to run chunk " .. name .. ": " .. tostring(result))
+	end
+
+	-- Our files return function(ctx) ... return Module end
+	-- So if result is a function, call it with ctx to get the actual module table.
+	if type(result) == "function" then
+		local okFactory, module = pcall(result, ctx)
+
+		if not okFactory then
+			error("[AutoTradeLoader] Failed to initialize module " .. name .. ": " .. tostring(module))
+		end
+
+		result = module
+	end
+
+	if result == nil then
+		error("[AutoTradeLoader] Module returned nil: " .. name)
+	end
+
+	print("[AutoTradeLoader] Loaded", name, "as", typeof(result))
+	return result
+end
+
 for _, name in ipairs(FILES) do
-	ctx.Modules[name] = loadRemote(name, ctx)
+	ctx.Modules[name] = loadRemote(name)
+end
+
+if type(ctx.Modules.Main) ~= "table" then
+	error("[AutoTradeLoader] Main module is not a table. Got: " .. typeof(ctx.Modules.Main))
+end
+
+if type(ctx.Modules.Main.Start) ~= "function" then
+	error("[AutoTradeLoader] Main.Start is missing.")
 end
 
 ctx.Modules.Main.Start(ctx)
