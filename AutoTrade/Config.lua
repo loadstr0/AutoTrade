@@ -66,6 +66,8 @@ return function(ctx)
 	Config.TradeOpenTimeout = 15
 	Config.TradeItemVerifyTimeout = 8
 	Config.TradeCountdownTimeout = 12
+	Config.TradeWaitBetweenItemAdds = true
+	Config.TradeAddRetryDelay = 0.75
 
 	Config.TradeLocalReadyTimeout = 8
 	Config.TradeBuyerReadyTimeout = 60

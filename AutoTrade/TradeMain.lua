@@ -338,28 +338,74 @@ return function(ctx)
 		return true
 	end
 
+	local function addSingleItemWithRetry(config, item, localUserId, index, total)
+		local uuid = getItemUuid(item)
+		local maxAttempts = cfgNumber(config, "MaxAddAttempts", 10)
+		local verifyTimeout = cfgNumber(config, "TradeItemVerifyTimeout", 8)
+		local retryDelay = cfgNumber(config, "TradeAddRetryDelay", 0.75)
+		local lastReason = "unknown"
+
+		if not uuid then
+			return false, "item_uuid_missing"
+		end
+
+		for attempt = 1, maxAttempts do
+			if TradeState.offerContainsItem and TradeState.offerContainsItem(localUserId, uuid) then
+				Logger.info("Item already in offer before add retry:", tostring(uuid))
+				return true
+			end
+
+			if attempt > 1 then
+				Logger.info("Retrying AddItemToTrade for item", index, "/", total, "attempt", attempt, "/", maxAttempts)
+				waitCountdownOrFail(config)
+				task.wait(retryDelay)
+			end
+
+			Logger.info("Adding trade item", index, "/", total, tostring(item.ItemType), tostring(item.ItemName), tostring(uuid), "attempt", attempt, "/", maxAttempts)
+
+			local addOk, addResult = TradeActions.addItemToTrade(item)
+
+			if addOk then
+				local seenOk, seenReason = TradeState.waitItemInOffer(localUserId, uuid, verifyTimeout)
+
+				if seenOk then
+					Logger.info("Verified trade item", index, "/", total, "in offer:", tostring(uuid))
+					return true
+				end
+
+				lastReason = tostring(seenReason)
+				Logger.warn("AddItemToTrade returned true but item was not verified yet:", tostring(seenReason), tostring(uuid))
+			else
+				lastReason = tostring(addResult)
+				Logger.warn("AddItemToTrade failed for item", index, "/", total, "attempt", attempt, "/", maxAttempts, tostring(addResult), tostring(uuid))
+			end
+		end
+
+		return false, "add_item_failed_after_retries:" .. tostring(lastReason) .. ":" .. tostring(uuid)
+	end
+
 	local function addAndVerifyItems(config, items, localUserId, uuids)
 		local clearBeforeAdd = cfgBool(config, "TradeClearBeforeAdd", true)
+		local waitBetweenAdds = cfgBool(config, "TradeWaitBetweenItemAdds", true)
 
 		if clearBeforeAdd and TradeActions.clearTradeContents then
 			TradeActions.clearTradeContents()
 		end
 
 		for index, item in ipairs(items) do
-			local uuid = getItemUuid(item)
-			Logger.info("Adding trade item", index, "/", #items, tostring(item.ItemType), tostring(item.ItemName), tostring(uuid))
+			if index > 1 and waitBetweenAdds then
+				Logger.info("Waiting for item-change cooldown before adding next item", index, "/", #items)
+				local cooldownOk, cooldownReason = waitCountdownOrFail(config)
 
-			local addOk, addResult = TradeActions.addItemToTrade(item)
-
-			if not addOk then
-				return false, "add_item_failed:" .. tostring(addResult) .. ":" .. tostring(uuid)
+				if not cooldownOk then
+					return false, "item_add_cooldown_failed:" .. tostring(cooldownReason)
+				end
 			end
 
-			local verifyTimeout = cfgNumber(config, "TradeItemVerifyTimeout", 8)
-			local seenOk, seenReason = TradeState.waitItemInOffer(localUserId, uuid, verifyTimeout)
+			local addOk, addReason = addSingleItemWithRetry(config, item, localUserId, index, #items)
 
-			if not seenOk then
-				return false, seenReason .. ":" .. tostring(uuid)
+			if not addOk then
+				return false, addReason
 			end
 		end
 
