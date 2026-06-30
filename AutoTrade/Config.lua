@@ -41,8 +41,8 @@ return function(ctx)
 	-- Gift/token safety.
 	-- SAFE by default: no token spending unless Python/bridge explicitly turns this off/on.
 	Config.GiftWithTokens = true
-	Config.GiftDryRun = true
-	Config.AllowTokenSpend = false
+	Config.GiftDryRun = false
+	Config.AllowTokenSpend = true
 	Config.GiftMessage = ""
 	Config.RequireTokenBalanceDecrease = true
 	Config.AssumeGiftSuccessWithoutTokenRead = false
