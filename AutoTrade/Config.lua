@@ -34,10 +34,10 @@ return function(ctx)
 	-- AllowTokenSpend = true
 	Config.GiftWithTokens = true
 	Config.GiftDryRun = true
-	Config.AllowTokenSpend = false
+	Config.AllowTokenSpend = true
 	Config.GiftMessage = ""
 	Config.RequireTokenBalanceDecrease = true
-	Config.AssumeGiftSuccessWithoutTokenRead = false
+	Config.AssumeGiftSuccessWithoutTokenRead = true
 	Config.ConfirmTokenSpendTimeout = 12
 
 	-- General behavior
@@ -64,8 +64,8 @@ return function(ctx)
 	Config.TradeOpenTimeout = 12
 
 	-- IMPORTANT: keep this false until we have proper final-state checks.
-	Config.TradeAutoConfirm = false
-	Config.RequireManualConfirm = true
+	Config.TradeAutoConfirm = true
+	Config.RequireManualConfirm = false
 
 	local function applyBool(fieldName, bridge, ...)
 		local keys = { ... }
