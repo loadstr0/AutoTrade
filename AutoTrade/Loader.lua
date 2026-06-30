@@ -6,6 +6,7 @@ local BRIDGE_FILE = getgenv().AutoTradeBridgeFile or "autotrade_bridge.json"
 local FILES = {
 	"Logger",
 	"Config",
+	"Heartbeat",
 	"PlayersUtil",
 	"ProductResolver",
 	"GiftActions",

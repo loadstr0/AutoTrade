@@ -7,6 +7,7 @@ return function(ctx)
 	local HttpService = ctx.Services.HttpService
 	local Logger = ctx.Modules.Logger
 	local Config = ctx.Modules.Config
+	local Heartbeat = ctx.Modules.Heartbeat
 
 	local BRIDGE_FILE = getgenv().AutoTradeBridgeFile or "autotrade_bridge.json"
 	local POLL_SECONDS = tonumber(getgenv().AutoTradePollSeconds or 5) or 5
@@ -393,6 +394,10 @@ return function(ctx)
 		end
 
 		busy = true
+		if Heartbeat and Heartbeat.SetJob then
+			Heartbeat.SetJob(bridge)
+			Heartbeat.SetPhase("job_started", { BridgeId = bridgeId, safeToRetry = true, dangerous = false })
+		end
 		markProcessed(bridge)
 
 		if Logger.clear then
@@ -411,6 +416,10 @@ return function(ctx)
 		if not ok then
 			Logger.error("Bridge run crashed:", result)
 
+			if Heartbeat and Heartbeat.SetPhase then
+				Heartbeat.SetPhase("lua_error_failed", { reason = tostring(result), safeToRetry = true, dangerous = false })
+			end
+
 			if type(bridge.GroupJobs) == "table" and Logger.writeGroupResults then
 				Logger.writeGroupResults(bridge.GroupJobs, false, tostring(result), {
 					GroupId = bridgeId,
@@ -421,12 +430,25 @@ return function(ctx)
 			end
 		else
 			Logger.info("Bridge run finished:", tostring(result), tostring(reason or ""))
+
+			if Heartbeat and Heartbeat.SetPhase then
+				Heartbeat.SetPhase(result == true and "completed" or "failed", { reason = tostring(reason or ""), safeToRetry = result ~= true, dangerous = false })
+			end
 		end
 
 		busy = false
+
+		if Heartbeat and Heartbeat.ClearJob then
+			Heartbeat.ClearJob()
+		end
 	end
 
 	function BridgeWatcher.Start()
+		if Heartbeat and Heartbeat.Start then
+			Heartbeat.Start()
+			Heartbeat.SetPhase("waiting_queue", { safeToRetry = true, dangerous = false })
+		end
+
 		Logger.info("Bridge watcher started.")
 		Logger.info("Watching file:", BRIDGE_FILE)
 		Logger.info("Poll seconds:", POLL_SECONDS)
@@ -442,12 +464,18 @@ return function(ctx)
 					local job, reason, pendingCount, readyCount, expiredCount = chooseNextJob(jobs)
 
 					if job then
+						if Heartbeat and Heartbeat.SetPhase then
+							Heartbeat.SetPhase("queue_job_ready", { safeToRetry = true, dangerous = false })
+						end
 						Logger.info("Queue state: pending=", pendingCount, "ready=", readyCount, "expired=", expiredCount)
 						runBridge(job)
 					else
 						local message = reason .. " pending=" .. tostring(pendingCount) .. " ready=" .. tostring(readyCount) .. " expired=" .. tostring(expiredCount)
 
 						if lastIdleReason ~= message then
+							if Heartbeat and Heartbeat.SetPhase then
+								Heartbeat.SetPhase("waiting_queue", { message = message, safeToRetry = true, dangerous = false })
+							end
 							Logger.info("Waiting for queue job:", message)
 							lastIdleReason = message
 						end

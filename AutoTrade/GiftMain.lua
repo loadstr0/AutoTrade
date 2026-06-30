@@ -4,11 +4,20 @@ return function(ctx)
 	local GiftMain = {}
 
 	local Logger = ctx.Modules.Logger
+	local Heartbeat = ctx.Modules.Heartbeat
 	local PlayersUtil = ctx.Modules.PlayersUtil
 	local ProductResolver = ctx.Modules.ProductResolver
 	local GiftActions = ctx.Modules.GiftActions
 
+	local function phase(name, info)
+		if Heartbeat and Heartbeat.SetPhase then
+			Heartbeat.SetPhase(name, info or {})
+		end
+	end
+
 	function GiftMain.Start(config)
+		phase("gift_start", { safeToRetry = true, dangerous = false })
+
 		Logger.info("Starting gift delivery.")
 
 		local userId, player = PlayersUtil.getUserIdFromName(config.BuyerName)
@@ -38,6 +47,8 @@ return function(ctx)
 		local lastReason = nil
 
 		for i = 1, repeatCount do
+			phase("gift_attempt", { attempt = i, safeToRetry = true, dangerous = false })
+
 			Logger.info(("Gift attempt %d/%d"):format(i, repeatCount))
 
 			local ok, reason = GiftActions.sendGift(config, userId, product)
@@ -49,6 +60,8 @@ return function(ctx)
 
 			task.wait(config.GiftRetryDelay or 1)
 		end
+
+		phase("completed", { safeToRetry = false, dangerous = false })
 
 		return true, "gift_sent"
 	end

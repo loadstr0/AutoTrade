@@ -10,6 +10,7 @@ return function(ctx)
 	local TradeState = ctx.Modules.TradeState
 	local Logger = ctx.Modules.Logger
 	local Config = ctx.Modules.Config
+	local Heartbeat = ctx.Modules.Heartbeat
 
 	local function getConfig(overrideConfig)
 		if type(overrideConfig) == "table" then
@@ -25,6 +26,12 @@ return function(ctx)
 		end
 
 		return Config
+	end
+
+	local function phase(name, info)
+		if Heartbeat and Heartbeat.SetPhase then
+			Heartbeat.SetPhase(name, info or {})
+		end
 	end
 
 	local function cfgNumber(config, key, default)
@@ -120,6 +127,8 @@ return function(ctx)
 		end
 
 		local pollSeconds = cfgNumber(config, "TradeBuyerJoinPollSeconds", 2)
+
+		phase("waiting_buyer", { BuyerName = config.BuyerName, BuyerUserId = config.BuyerUserId, safeToRetry = true, dangerous = false })
 
 		Logger.info("Waiting for buyer to join server:")
 		Logger.info("  BuyerName =", tostring(config.BuyerName))
@@ -361,6 +370,8 @@ return function(ctx)
 				task.wait(retryDelay)
 			end
 
+			phase("adding_items", { ItemName = item.ItemName, ItemType = item.ItemType, safeToRetry = true, dangerous = false })
+
 			Logger.info("Adding trade item", index, "/", total, tostring(item.ItemType), tostring(item.ItemName), tostring(uuid), "attempt", attempt, "/", maxAttempts)
 
 			local addOk, addResult = TradeActions.addItemToTrade(item)
@@ -415,11 +426,15 @@ return function(ctx)
 			return false, "not_all_items_seen_in_offer:" .. tostring(missingUuid)
 		end
 
+		phase("items_verified", { Quantity = #items, safeToRetry = true, dangerous = false })
+
 		Logger.info("All trade items added and verified:", #items)
 		return true
 	end
 
 	local function readyAndVerify(config, localUserId)
+		phase("ready_sent", { safeToRetry = true, dangerous = false })
+
 		local readyOk, readyResult = TradeActions.readyUp(true)
 
 		if not readyOk then
@@ -441,6 +456,8 @@ return function(ctx)
 
 	local function waitBuyerReady(config, buyerUserId, localUserId, uuids)
 		local timeout = cfgNumber(config, "TradeBuyerReadyTimeout", 60)
+
+		phase("waiting_buyer_ready", { safeToRetry = true, dangerous = false })
 
 		Logger.info("Waiting for buyer to ready. Timeout:", timeout)
 
@@ -474,6 +491,8 @@ return function(ctx)
 		Logger.info("Starting confirm loop. Timeout:", confirmRetryTimeout)
 
 		while os.clock() - start < confirmRetryTimeout do
+			phase("confirm_sent", { safeToRetry = false, dangerous = true })
+
 			local confirmOk, confirmResult = TradeActions.confirmTrade()
 
 			if confirmOk then
@@ -482,6 +501,8 @@ return function(ctx)
 				local ok, reason = TradeState.waitLocalConfirmed(localUserId, cfgNumber(config, "TradeLocalConfirmTimeout", 8))
 
 				if ok then
+					phase("local_confirmed", { safeToRetry = false, dangerous = true })
+
 					Logger.info("Local confirm/processing verified.")
 					return true
 				end
@@ -502,6 +523,8 @@ return function(ctx)
 	local function waitBuyerConfirmOrProcessing(config, buyerUserId, localUserId, uuids)
 		local timeout = cfgNumber(config, "TradeBuyerConfirmTimeout", 60)
 
+		phase("waiting_buyer_confirm", { safeToRetry = false, dangerous = true })
+
 		Logger.info("Waiting for buyer confirm or processing. Timeout:", timeout)
 
 		local ok, reason = TradeState.waitBuyerConfirmedOrProcessing(buyerUserId, localUserId, uuids, timeout)
@@ -510,12 +533,16 @@ return function(ctx)
 			return false, reason
 		end
 
+		phase("buyer_confirmed", { safeToRetry = false, dangerous = true })
+
 		Logger.info("Buyer confirm/processing verified:", tostring(reason))
 		return true
 	end
 
 	local function waitFinalResult(config)
 		local timeout = cfgNumber(config, "TradeFinalTimeout", 30)
+
+		phase("processing", { safeToRetry = false, dangerous = true })
 
 		Logger.info("Waiting for final trade result. Timeout:", timeout)
 
@@ -524,6 +551,8 @@ return function(ctx)
 		if not ok then
 			return false, reason
 		end
+
+		phase("completed", { safeToRetry = false, dangerous = false })
 
 		Logger.info("Final trade result verified:", tostring(reason))
 		return true
@@ -560,16 +589,22 @@ return function(ctx)
 			return false, "missing_buyer_user_id"
 		end
 
+		phase("trade_attempt_start", { attempt = nil, safeToRetry = true, dangerous = false })
+
 		Logger.info("Security check:")
 		Logger.info("  LocalUserId =", localUserId)
 		Logger.info("  BuyerUserId =", buyerUserId)
 		Logger.info("  Item count =", #items)
+
+		phase("trade_requesting", { BuyerName = buyer.Name, BuyerUserId = buyer.UserId, safeToRetry = true, dangerous = false })
 
 		local requestOk, requestResult = TradeActions.sendTradeRequest(buyer)
 
 		if not requestOk then
 			return false, "trade_request_failed:" .. tostring(requestResult)
 		end
+
+		phase("waiting_trade_open", { safeToRetry = true, dangerous = false })
 
 		Logger.info("Trade request sent. Waiting for real trade replion...")
 
@@ -579,6 +614,8 @@ return function(ctx)
 		if not openOk then
 			return false, openReason
 		end
+
+		phase("trade_open", { safeToRetry = true, dangerous = false })
 
 		Logger.info("Real trade opened for correct buyer:", tostring(openReason))
 
@@ -652,6 +689,8 @@ return function(ctx)
 	function TradeMain.Start(overrideConfig)
 		local config = getConfig(overrideConfig)
 
+		phase("trade_start", { safeToRetry = true, dangerous = false })
+
 		Logger.info("Starting secure trade delivery.")
 
 		if not cfgBool(config, "AllowTrade", true) then
@@ -710,6 +749,8 @@ return function(ctx)
 			return false, uuidReason
 		end
 
+		phase("items_selected", { Quantity = #items, safeToRetry = true, dangerous = false })
+
 		Logger.info("Selected", #items, "item(s) for secure trade.")
 
 		local retries = cfgNumber(config, "TradeRequestRetries", 5)
@@ -718,6 +759,8 @@ return function(ctx)
 		local lastReason = "unknown"
 
 		for attempt = 1, retries do
+			phase("trade_attempt", { attempt = attempt, safeToRetry = true, dangerous = false })
+
 			Logger.info("Secure trade attempt", attempt, "/", retries)
 
 			buyer, buyerReason = findBuyer(config)
@@ -734,11 +777,15 @@ return function(ctx)
 			local ok, reason = runSingleAttempt(config, buyer, items, uuids)
 
 			if ok then
+				phase("completed", { safeToRetry = false, dangerous = false })
+
 				Logger.info("Secure trade delivery finished successfully.")
 				return true, "trade_complete"
 			end
 
 			lastReason = reason
+			phase("attempt_failed", { reason = tostring(reason), safeToRetry = true, dangerous = false })
+
 			Logger.warn("Secure trade attempt failed:", tostring(reason))
 
 			safeCancel(reason)

@@ -40,6 +40,11 @@ return function(ctx)
 	Config.QueueProcessOnlyReadyBuyers = true
 	Config.QueueFailExpiredJobs = true
 
+	-- Heartbeat / crash recovery
+	Config.HeartbeatFile = "autotrade_heartbeat.json"
+	Config.HeartbeatSeconds = 3
+	Config.MarkDangerousAfterConfirm = true
+
 	-- Trade safety
 	Config.AllowTrade = true
 
@@ -74,7 +79,6 @@ return function(ctx)
 	Config.TradeOpenTimeout = 15
 	Config.TradeItemVerifyTimeout = 8
 	Config.TradeCountdownTimeout = 12
-
 	Config.TradeWaitBetweenItemAdds = true
 	Config.TradeAddRetryDelay = 0.75
 

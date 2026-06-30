@@ -5,6 +5,7 @@ return function(ctx)
 
 	local ReplicatedStorage = ctx.Services.ReplicatedStorage
 	local Logger = ctx.Modules.Logger
+	local Heartbeat = ctx.Modules.Heartbeat
 
 	local Remotes = ReplicatedStorage:WaitForChild("Remotes")
 	local SetGiftTo = Remotes:WaitForChild("SetGiftTo")
@@ -48,9 +49,17 @@ return function(ctx)
 		return false, last
 	end
 
+	local function phase(name, info)
+		if Heartbeat and Heartbeat.SetPhase then
+			Heartbeat.SetPhase(name, info or {})
+		end
+	end
+
 	function GiftActions.sendGift(config, targetUserId, product)
 		local productId = tonumber(product.productId)
 		local giftMessage = config.GiftMessage or ""
+
+		phase("gift_precheck", { BuyerUserId = targetUserId, ProductId = productId, safeToRetry = true, dangerous = false })
 
 		Logger.info("Gift target userId:", targetUserId)
 		Logger.info("Gift productId:", productId)
@@ -91,6 +100,8 @@ return function(ctx)
 			return false, "could_not_read_token_balance"
 		end
 
+		phase("gift_remote_sent", { BuyerUserId = targetUserId, ProductId = productId, safeToRetry = false, dangerous = true })
+
 		local ok, err = pcall(function()
 			-- This mirrors GiftingController's token path:
 			-- purchaseGift(true) -> SetGiftTo:FireServer(targetUserId, productId, giftMessage, true, nil)
@@ -102,13 +113,19 @@ return function(ctx)
 			return false, tostring(err)
 		end
 
+		phase("gift_remote_fired", { BuyerUserId = targetUserId, ProductId = productId, safeToRetry = false, dangerous = true })
+
 		Logger.info("SetGiftTo fired successfully.")
 
 		if config.RequireTokenBalanceDecrease == true and beforeTokens ~= nil then
+			phase("gift_waiting_token_decrease", { BuyerUserId = targetUserId, ProductId = productId, safeToRetry = false, dangerous = true })
+
 			Logger.info("Waiting for token balance decrease...")
 			local decreased, afterTokens = waitForTokenDecrease(beforeTokens, config.ConfirmTokenSpendTimeout or 12)
 
 			if decreased then
+				phase("completed", { BuyerUserId = targetUserId, ProductId = productId, safeToRetry = false, dangerous = false })
+
 				Logger.info("Token balance decreased:", beforeTokens, "->", afterTokens)
 				return true, "gift_sent_token_decreased"
 			end
@@ -116,6 +133,8 @@ return function(ctx)
 			Logger.warn("Token balance did not decrease within timeout. Last balance:", tostring(afterTokens))
 			return false, "token_balance_not_changed"
 		end
+
+		phase("gift_unconfirmed", { BuyerUserId = targetUserId, ProductId = productId, safeToRetry = false, dangerous = true })
 
 		Logger.warn("Gift fired, but token decrease confirmation was skipped.")
 		return true, "gift_fired_unconfirmed"

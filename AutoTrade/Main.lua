@@ -32,8 +32,21 @@ return function(ctx)
 	function Main.Start()
 		local Logger = ctx.Modules.Logger
 		local Config = ctx.Modules.Config
+		local Heartbeat = ctx.Modules.Heartbeat
 
 		ctx.Config = Config.Resolve and Config.Resolve(ctx) or Config.Get(ctx)
+
+		if Heartbeat and Heartbeat.SetJob and ctx.Bridge then
+			Heartbeat.SetJob(ctx.Bridge)
+			Heartbeat.SetPhase("main_start", {
+				BridgeId = ctx.Config.BridgeId,
+				DeliveryMode = ctx.Config.DeliveryMode,
+				BuyerName = ctx.Config.BuyerName,
+				BuyerUserId = ctx.Config.BuyerUserId,
+				safeToRetry = true,
+				dangerous = false,
+			})
+		end
 		local resolved = ctx.Config
 
 		Logger.dumpTable("Bridge payload:", ctx.Bridge)
@@ -83,12 +96,22 @@ return function(ctx)
 		local reason = "unknown"
 
 		if resolved.DeliveryMode == "Gift" then
+			if Heartbeat and Heartbeat.SetPhase then
+				Heartbeat.SetPhase("gift_start", { safeToRetry = true, dangerous = false })
+			end
 			ok, reason = ctx.Modules.GiftMain.Start(resolved)
 		elseif resolved.DeliveryMode == "Trade" then
+			if Heartbeat and Heartbeat.SetPhase then
+				Heartbeat.SetPhase("trade_start", { safeToRetry = true, dangerous = false })
+			end
 			ok, reason = ctx.Modules.TradeMain.Start(resolved)
 		else
 			ok = false
 			reason = "unknown_delivery_mode"
+		end
+
+		if Heartbeat and Heartbeat.SetPhase then
+			Heartbeat.SetPhase(ok == true and "completed" or "failed", { reason = tostring(reason or ""), safeToRetry = ok ~= true, dangerous = false })
 		end
 
 		Logger.info("Finished:", tostring(ok), tostring(reason))
