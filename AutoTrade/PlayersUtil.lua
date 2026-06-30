@@ -34,6 +34,33 @@ return function(ctx)
 		return nil
 	end
 
+
+	function PlayersUtil.findPlayerByUserId(userId)
+		userId = tonumber(userId)
+
+		if not userId then
+			return nil
+		end
+
+		for _, player in ipairs(Players:GetPlayers()) do
+			if player.UserId == userId then
+				return player
+			end
+		end
+
+		return nil
+	end
+
+	function PlayersUtil.findPlayerExact(name, userId)
+		local byId = PlayersUtil.findPlayerByUserId(userId)
+
+		if byId then
+			return byId
+		end
+
+		return PlayersUtil.findPlayer(name)
+	end
+
 	function PlayersUtil.waitForPlayer(name, timeout)
 		timeout = timeout or math.huge
 		local start = os.clock()

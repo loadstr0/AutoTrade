@@ -11,7 +11,11 @@ return function(ctx)
 	local Logger = ctx.Modules.Logger
 	local Config = ctx.Modules.Config
 
-	local function getConfig()
+	local function getConfig(overrideConfig)
+		if type(overrideConfig) == "table" then
+			return overrideConfig
+		end
+
 		if type(Config.Resolve) == "function" then
 			return Config.Resolve(ctx)
 		end
@@ -83,10 +87,25 @@ return function(ctx)
 	end
 
 	local function findBuyer(config)
-		local buyer = PlayersUtil.findPlayer(config.BuyerName)
+		local buyer = nil
+
+		if PlayersUtil.findPlayerByUserId and config.BuyerUserId then
+			buyer = PlayersUtil.findPlayerByUserId(config.BuyerUserId)
+
+			if buyer then
+				return buyer
+			end
+		end
+
+		buyer = PlayersUtil.findPlayer(config.BuyerName)
 
 		if not buyer then
 			return nil, "buyer_not_found"
+		end
+
+		if config.BuyerUserId and tonumber(config.BuyerUserId) and buyer.UserId ~= tonumber(config.BuyerUserId) then
+			Logger.warn("Buyer name matched but UserId mismatch. Refusing:", buyer.Name, buyer.UserId, "expected", config.BuyerUserId)
+			return nil, "buyer_user_id_mismatch"
 		end
 
 		return buyer
@@ -104,13 +123,14 @@ return function(ctx)
 
 		Logger.info("Waiting for buyer to join server:")
 		Logger.info("  BuyerName =", tostring(config.BuyerName))
+		Logger.info("  BuyerUserId =", tostring(config.BuyerUserId))
 		Logger.info("  Timeout =", timeout)
 
 		local start = os.clock()
 		local lastLog = 0
 
 		while os.clock() - start < timeout do
-			local buyer = PlayersUtil.findPlayer(config.BuyerName)
+			local buyer = findBuyer(config)
 
 			if buyer then
 				Logger.info("Buyer joined/found:", buyer.Name, buyer.UserId)
@@ -172,20 +192,133 @@ return function(ctx)
 			return true
 		end
 
+		if reason:find("our_item_removed_or_missing", 1, true) then
+			return true
+		end
+
 		return false
 	end
 
-	local function checkQuantitySupported(config)
-		local quantity = tonumber(config.Quantity or 1) or 1
-		local orderQuantity = tonumber(config.OrderQuantity or 1) or 1
-		local totalQuantity = math.max(quantity, orderQuantity)
+	local function getBridgeId(job, index)
+		return tostring(job.BridgeId or job.OrderId or ("job_" .. tostring(index)))
+	end
 
-		if totalQuantity > 1 and not cfgBool(config, "AllowMultiQuantityTrade", false) then
-			Logger.warn("Multiple quantity orders are not safely supported yet:", totalQuantity)
-			return false, "multi_quantity_not_supported_yet"
+	local function getJobs(config)
+		if type(config.GroupJobs) == "table" and #config.GroupJobs > 0 then
+			return config.GroupJobs
 		end
 
-		return true
+		return { config }
+	end
+
+	local function normalizeJob(config, job, index)
+		local normalized = {}
+
+		for k, v in pairs(config) do
+			if type(v) ~= "function" and k ~= "GroupJobs" then
+				normalized[k] = v
+			end
+		end
+
+		if type(job) == "table" then
+			for k, v in pairs(job) do
+				normalized[k] = v
+			end
+		end
+
+		normalized.BridgeId = getBridgeId(normalized, index)
+		normalized.DeliveryMode = normalized.DeliveryMode or "Trade"
+		normalized.ItemType = normalized.ItemType or config.DefaultItemType or "Sword"
+		normalized.Quantity = math.max(1, tonumber(normalized.Quantity or 1) or 1)
+		normalized.OrderQuantity = math.max(1, tonumber(normalized.OrderQuantity or 1) or 1)
+		normalized.TotalQuantity = math.max(normalized.Quantity, normalized.OrderQuantity)
+
+		return normalized
+	end
+
+	local function collectTradePlan(config)
+		local rawJobs = getJobs(config)
+		local jobs = {}
+		local totalItems = 0
+
+		for index, rawJob in ipairs(rawJobs) do
+			local job = normalizeJob(config, rawJob, index)
+
+			if job.DeliveryMode ~= "Trade" then
+				return nil, "group_contains_non_trade_job"
+			end
+
+			if not job.BuyerName or job.BuyerName == "" then
+				return nil, "missing_buyer_name_in_group"
+			end
+
+			if tostring(job.BuyerName):lower() ~= tostring(config.BuyerName):lower() then
+				return nil, "group_contains_different_buyer"
+			end
+
+			if not job.ItemType or job.ItemType == "" then
+				return nil, "missing_item_type_in_group"
+			end
+
+			if not job.ItemName or job.ItemName == "" then
+				return nil, "missing_item_name_in_group"
+			end
+
+			totalItems += job.TotalQuantity
+			table.insert(jobs, job)
+		end
+
+		local maxItems = cfgNumber(config, "MaxTradeItemsPerBatch", 100)
+
+		if totalItems > maxItems then
+			return nil, "too_many_items_for_trade_batch:" .. tostring(totalItems)
+		end
+
+		return {
+			Jobs = jobs,
+			TotalItems = totalItems,
+		}
+	end
+
+	local function selectItemsForPlan(plan)
+		local selected = {}
+		local excluded = {}
+
+		for _, job in ipairs(plan.Jobs) do
+			Logger.info("Selecting items for job:", tostring(job.BridgeId), job.ItemType, job.ItemName, "x", job.TotalQuantity)
+
+			local items, reason, partial = InventoryUtil.findTradableItems(job.ItemType, job.ItemName, job.TotalQuantity, excluded)
+
+			if not items then
+				return nil, "item_not_found_or_not_enough:" .. tostring(reason) .. ":" .. tostring(job.BridgeId), partial
+			end
+
+			job.SelectedItems = items
+
+			for _, item in ipairs(items) do
+				item.BridgeId = job.BridgeId
+				item.OrderTitle = job.OrderTitle
+				table.insert(selected, item)
+			end
+		end
+
+		return selected
+	end
+
+	local function getUuids(items)
+		local uuids = {}
+
+		for _, item in ipairs(items) do
+			local uuid = getItemUuid(item)
+
+			if not uuid then
+				return nil, "item_uuid_missing"
+			end
+
+			table.insert(uuids, uuid)
+		end
+
+		return uuids
 	end
 
 	local function waitCountdownOrFail(config)
@@ -205,34 +338,38 @@ return function(ctx)
 		return true
 	end
 
-	local function addAndVerifyItem(config, item, localUserId, uuid)
+	local function addAndVerifyItems(config, items, localUserId, uuids)
 		local clearBeforeAdd = cfgBool(config, "TradeClearBeforeAdd", true)
 
 		if clearBeforeAdd and TradeActions.clearTradeContents then
 			TradeActions.clearTradeContents()
 		end
 
-		local addOk, addResult = TradeActions.addItemToTrade(item)
+		for index, item in ipairs(items) do
+			local uuid = getItemUuid(item)
+			Logger.info("Adding trade item", index, "/", #items, tostring(item.ItemType), tostring(item.ItemName), tostring(uuid))
 
-		if not addOk then
-			return false, "add_item_failed:" .. tostring(addResult)
-		end
+			local addOk, addResult = TradeActions.addItemToTrade(item)
 
-		Logger.info("AddItemToTrade returned success. Verifying item appears in our offer...")
+			if not addOk then
+				return false, "add_item_failed:" .. tostring(addResult) .. ":" .. tostring(uuid)
+			end
 
-		local verifyTimeout = cfgNumber(config, "TradeItemVerifyTimeout", 8)
-
-		if TradeState.waitItemInOffer then
+			local verifyTimeout = cfgNumber(config, "TradeItemVerifyTimeout", 8)
 			local seenOk, seenReason = TradeState.waitItemInOffer(localUserId, uuid, verifyTimeout)
 
 			if not seenOk then
-				return false, seenReason
+				return false, seenReason .. ":" .. tostring(uuid)
 			end
-		else
-			Logger.warn("TradeState.waitItemInOffer missing. Cannot verify item in offer.")
-			return false, "missing_item_offer_verification"
 		end
 
+		local allPresent, missingUuid = TradeState.offerContainsAllItems(localUserId, uuids)
+
+		if not allPresent then
+			return false, "not_all_items_seen_in_offer:" .. tostring(missingUuid)
+		end
+
+		Logger.info("All trade items added and verified:", #items)
 		return true
 	end
 
@@ -246,32 +383,22 @@ return function(ctx)
 		Logger.info("ReadyUp(true) sent. Verifying local ready state...")
 
 		local timeout = cfgNumber(config, "TradeLocalReadyTimeout", 8)
+		local ok, reason = TradeState.waitLocalReady(localUserId, timeout)
 
-		if TradeState.waitLocalReady then
-			local ok, reason = TradeState.waitLocalReady(localUserId, timeout)
-
-			if not ok then
-				return false, reason
-			end
-		else
-			Logger.warn("TradeState.waitLocalReady missing.")
-			return false, "missing_local_ready_verification"
+		if not ok then
+			return false, reason
 		end
 
 		Logger.info("Verified local ready.")
 		return true
 	end
 
-	local function waitBuyerReady(config, buyerUserId, localUserId, uuid)
+	local function waitBuyerReady(config, buyerUserId, localUserId, uuids)
 		local timeout = cfgNumber(config, "TradeBuyerReadyTimeout", 60)
-
-		if not TradeState.waitBuyerReady then
-			return false, "missing_buyer_ready_verification"
-		end
 
 		Logger.info("Waiting for buyer to ready. Timeout:", timeout)
 
-		local ok, reason = TradeState.waitBuyerReady(buyerUserId, localUserId, uuid, timeout)
+		local ok, reason = TradeState.waitBuyerReady(buyerUserId, localUserId, uuids, timeout)
 
 		if not ok then
 			return false, reason
@@ -306,19 +433,15 @@ return function(ctx)
 			if confirmOk then
 				Logger.info("ConfirmTrade returned success. Verifying local confirm/processing...")
 
-				if TradeState.waitLocalConfirmed then
-					local ok, reason = TradeState.waitLocalConfirmed(localUserId, cfgNumber(config, "TradeLocalConfirmTimeout", 8))
+				local ok, reason = TradeState.waitLocalConfirmed(localUserId, cfgNumber(config, "TradeLocalConfirmTimeout", 8))
 
-					if ok then
-						Logger.info("Local confirm/processing verified.")
-						return true
-					end
-
-					lastReason = reason
-					Logger.warn("Local confirm not verified yet:", tostring(reason))
-				else
-					return false, "missing_local_confirm_verification"
+				if ok then
+					Logger.info("Local confirm/processing verified.")
+					return true
 				end
+
+				lastReason = reason
+				Logger.warn("Local confirm not verified yet:", tostring(reason))
 			else
 				lastReason = confirmResult
 				Logger.warn("ConfirmTrade failed:", tostring(confirmResult))
@@ -330,16 +453,12 @@ return function(ctx)
 		return false, "confirm_timeout:" .. tostring(lastReason)
 	end
 
-	local function waitBuyerConfirmOrProcessing(config, buyerUserId, localUserId, uuid)
+	local function waitBuyerConfirmOrProcessing(config, buyerUserId, localUserId, uuids)
 		local timeout = cfgNumber(config, "TradeBuyerConfirmTimeout", 60)
-
-		if not TradeState.waitBuyerConfirmedOrProcessing then
-			return false, "missing_buyer_confirm_verification"
-		end
 
 		Logger.info("Waiting for buyer confirm or processing. Timeout:", timeout)
 
-		local ok, reason = TradeState.waitBuyerConfirmedOrProcessing(buyerUserId, localUserId, uuid, timeout)
+		local ok, reason = TradeState.waitBuyerConfirmedOrProcessing(buyerUserId, localUserId, uuids, timeout)
 
 		if not ok then
 			return false, reason
@@ -351,10 +470,6 @@ return function(ctx)
 
 	local function waitFinalResult(config)
 		local timeout = cfgNumber(config, "TradeFinalTimeout", 30)
-
-		if not TradeState.waitFinalResult then
-			return false, "missing_final_result_verification"
-		end
 
 		Logger.info("Waiting for final trade result. Timeout:", timeout)
 
@@ -387,7 +502,7 @@ return function(ctx)
 		end
 	end
 
-	local function runSingleAttempt(config, buyer, item, uuid)
+	local function runSingleAttempt(config, buyer, items, uuids)
 		if TradeState.resetStatus then
 			TradeState.resetStatus()
 		end
@@ -402,7 +517,7 @@ return function(ctx)
 		Logger.info("Security check:")
 		Logger.info("  LocalUserId =", localUserId)
 		Logger.info("  BuyerUserId =", buyerUserId)
-		Logger.info("  Item UUID =", uuid)
+		Logger.info("  Item count =", #items)
 
 		local requestOk, requestResult = TradeActions.sendTradeRequest(buyer)
 
@@ -421,13 +536,13 @@ return function(ctx)
 
 		Logger.info("Real trade opened for correct buyer:", tostring(openReason))
 
-		local addOk, addReason = addAndVerifyItem(config, item, localUserId, uuid)
+		local addOk, addReason = addAndVerifyItems(config, items, localUserId, uuids)
 
 		if not addOk then
 			return false, addReason
 		end
 
-		Logger.info("Item added and verified.")
+		Logger.info("Items added and verified.")
 
 		local countdownOk, countdownReason = waitCountdownOrFail(config)
 
@@ -441,14 +556,16 @@ return function(ctx)
 			return false, readyReason
 		end
 
-		local buyerReadyOk, buyerReadyReason = waitBuyerReady(config, buyerUserId, localUserId, uuid)
+		local buyerReadyOk, buyerReadyReason = waitBuyerReady(config, buyerUserId, localUserId, uuids)
 
 		if not buyerReadyOk then
 			return false, buyerReadyReason
 		end
 
-		if TradeState.offerContainsItem and not TradeState.offerContainsItem(localUserId, uuid) then
-			return false, "our_item_missing_before_confirm"
+		local allPresent, missingUuid = TradeState.offerContainsAllItems(localUserId, uuids)
+
+		if not allPresent then
+			return false, "our_item_missing_before_confirm:" .. tostring(missingUuid)
 		end
 
 		local countdownOk2, countdownReason2 = waitCountdownOrFail(config)
@@ -457,8 +574,10 @@ return function(ctx)
 			return false, countdownReason2
 		end
 
-		if TradeState.offerContainsItem and not TradeState.offerContainsItem(localUserId, uuid) then
-			return false, "our_item_missing_after_countdown"
+		allPresent, missingUuid = TradeState.offerContainsAllItems(localUserId, uuids)
+
+		if not allPresent then
+			return false, "our_item_missing_after_countdown:" .. tostring(missingUuid)
 		end
 
 		local confirmOk, confirmReason = confirmAndVerify(config, localUserId)
@@ -467,7 +586,7 @@ return function(ctx)
 			return false, confirmReason
 		end
 
-		local buyerConfirmOk, buyerConfirmReason = waitBuyerConfirmOrProcessing(config, buyerUserId, localUserId, uuid)
+		local buyerConfirmOk, buyerConfirmReason = waitBuyerConfirmOrProcessing(config, buyerUserId, localUserId, uuids)
 
 		if not buyerConfirmOk then
 			return false, buyerConfirmReason
@@ -484,8 +603,8 @@ return function(ctx)
 		return true, "trade_complete"
 	end
 
-	function TradeMain.Start()
-		local config = getConfig()
+	function TradeMain.Start(overrideConfig)
+		local config = getConfig(overrideConfig)
 
 		Logger.info("Starting secure trade delivery.")
 
@@ -493,23 +612,17 @@ return function(ctx)
 			return false, "trade_disabled_by_config"
 		end
 
-		if not config.BuyerName or config.BuyerName == "" then
-			return false, "missing_buyer_name"
+		if (not config.BuyerName or config.BuyerName == "") and not config.BuyerUserId then
+			return false, "missing_buyer_identity"
 		end
 
-		if not config.ItemName or config.ItemName == "" then
-			return false, "missing_item_name"
+		local plan, planReason = collectTradePlan(config)
+
+		if not plan then
+			return false, planReason
 		end
 
-		if not config.ItemType or config.ItemType == "" then
-			return false, "missing_item_type"
-		end
-
-		local qtyOk, qtyReason = checkQuantitySupported(config)
-
-		if not qtyOk then
-			return false, qtyReason
-		end
+		Logger.info("Trade plan:", #plan.Jobs, "job(s),", plan.TotalItems, "item(s)")
 
 		local buyer, buyerReason = waitForBuyer(config)
 
@@ -539,19 +652,19 @@ return function(ctx)
 			Logger.info("Buyer still in server after cooldown:", buyer.Name, buyer.UserId)
 		end
 
-		local item = InventoryUtil.findTradableItem(config.ItemType, config.ItemName)
+		local items, selectReason = selectItemsForPlan(plan)
 
-		if not item then
-			return false, "item_not_found"
+		if not items then
+			return false, selectReason
 		end
 
-		local uuid = getItemUuid(item)
+		local uuids, uuidReason = getUuids(items)
 
-		if not uuid then
-			return false, "item_uuid_missing"
+		if not uuids then
+			return false, uuidReason
 		end
 
-		Logger.info("Selected item for secure trade:", tostring(uuid))
+		Logger.info("Selected", #items, "item(s) for secure trade.")
 
 		local retries = cfgNumber(config, "TradeRequestRetries", 5)
 		local retryDelay = cfgNumber(config, "TradeRequestRetryDelay", 3)
@@ -572,7 +685,7 @@ return function(ctx)
 				end
 			end
 
-			local ok, reason = runSingleAttempt(config, buyer, item, uuid)
+			local ok, reason = runSingleAttempt(config, buyer, items, uuids)
 
 			if ok then
 				Logger.info("Secure trade delivery finished successfully.")

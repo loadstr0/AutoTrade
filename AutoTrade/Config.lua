@@ -5,6 +5,7 @@ return function(ctx)
 
 	-- Bridge/default payload fields. These are usually overwritten by Python JSON.
 	Config.BuyerName = nil
+	Config.BuyerUserId = nil
 	Config.ItemName = nil
 	Config.ItemType = nil
 	Config.DeliveryMode = nil
@@ -22,10 +23,17 @@ return function(ctx)
 	Config.BridgeId = nil
 	Config.CreatedAt = nil
 	Config.DeadlineUnix = nil
+	Config.GroupJobs = nil
+	Config.Grouped = false
 
 	-- Defaults
 	Config.DefaultDeliveryMode = "Trade"
 	Config.DefaultItemType = "Sword"
+
+	-- Queue behavior
+	Config.QueueGroupSameBuyerTrades = true
+	Config.QueueProcessOnlyReadyBuyers = true
+	Config.QueueFailExpiredJobs = true
 
 	-- Trade safety
 	Config.AllowTrade = true
@@ -71,8 +79,10 @@ return function(ctx)
 	Config.TradeAutoConfirm = true
 	Config.RequireManualConfirm = false
 
-	-- Quantity safety: keep false until multi-item trades are implemented and tested.
-	Config.AllowMultiQuantityTrade = false
+	-- Multi item / multi order support.
+	Config.AllowMultiQuantityTrade = true
+	Config.AllowSameBuyerTradeBatching = true
+	Config.MaxTradeItemsPerBatch = 100
 
 	-- Completed popup
 	Config.CloseCompletedPopup = true
@@ -124,8 +134,15 @@ return function(ctx)
 			end
 		end
 
-		resolved.Quantity = tonumber(resolved.Quantity or 1) or 1
-		resolved.OrderQuantity = tonumber(resolved.OrderQuantity or 1) or 1
+		resolved.Quantity = math.max(1, tonumber(resolved.Quantity or 1) or 1)
+		resolved.OrderQuantity = math.max(1, tonumber(resolved.OrderQuantity or 1) or 1)
+		resolved.CreatedAt = tonumber(resolved.CreatedAt or 0) or 0
+		resolved.DeadlineUnix = tonumber(resolved.DeadlineUnix or 0) or 0
+		resolved.BuyerUserId = tonumber(resolved.BuyerUserId or 0) or nil
+
+		if resolved.BuyerUserId == 0 then
+			resolved.BuyerUserId = nil
+		end
 
 		return resolved
 	end
@@ -144,6 +161,39 @@ return function(ctx)
 		return Config.Resolve(overrideCtx)
 	end
 
+	-- Compatibility for older Main.lua-style modules.
+	function Config.ApplyBridge(bridge)
+		applyBridge(Config, bridge)
+		normalize(Config)
+		return Config
+	end
+
+	function Config.Validate(config)
+		config = config or Config.Resolve(ctx)
+
+		if (not config.BuyerName or config.BuyerName == "") and not config.BuyerUserId then
+			return false, "missing_buyer_identity"
+		end
+
+		if config.DeliveryMode == "Trade" then
+			if not config.ItemType or config.ItemType == "" then
+				return false, "missing_item_type"
+			end
+
+			if not config.ItemName or config.ItemName == "" then
+				return false, "missing_item_name"
+			end
+		elseif config.DeliveryMode == "Gift" then
+			if not config.ProductName and not config.ProductId then
+				return false, "missing_product"
+			end
+		else
+			return false, "unknown_delivery_mode"
+		end
+
+		return true
+	end
+
 	function Config.PrintResolved(overrideCtx, Logger)
 		local resolved = Config.Resolve(overrideCtx)
 		Logger = Logger or (overrideCtx and overrideCtx.Modules and overrideCtx.Modules.Logger)
@@ -153,6 +203,7 @@ return function(ctx)
 
 			local keys = {
 				"BuyerName",
+				"BuyerUserId",
 				"DeliveryMode",
 				"ItemType",
 				"ItemName",
@@ -162,15 +213,22 @@ return function(ctx)
 				"OrderQuantity",
 				"BridgeId",
 				"DeadlineUnix",
+				"Grouped",
 				"ResultFile",
 				"TradeAutoConfirm",
 				"RequireManualConfirm",
+				"AllowMultiQuantityTrade",
+				"AllowSameBuyerTradeBatching",
 				"GiftDryRun",
 				"AllowTokenSpend",
 			}
 
 			for _, key in ipairs(keys) do
 				Logger.info(" ", key, "=", tostring(resolved[key]))
+			end
+
+			if type(resolved.GroupJobs) == "table" then
+				Logger.info("  GroupJobs =", #resolved.GroupJobs)
 			end
 		end
 

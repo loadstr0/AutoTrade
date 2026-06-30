@@ -6,6 +6,7 @@ return function(ctx)
 	local Players = ctx.Services.Players
 	local HttpService = ctx.Services.HttpService
 	local Logger = ctx.Modules.Logger
+	local Config = ctx.Modules.Config
 
 	local BRIDGE_FILE = getgenv().AutoTradeBridgeFile or "autotrade_bridge.json"
 	local POLL_SECONDS = tonumber(getgenv().AutoTradePollSeconds or 5) or 5
@@ -105,6 +106,26 @@ return function(ctx)
 		}, "|")
 	end
 
+	local function getJobIds(bridge)
+		local ids = {}
+
+		if type(bridge) == "table" and type(bridge.GroupJobs) == "table" then
+			for _, job in ipairs(bridge.GroupJobs) do
+				table.insert(ids, getBridgeId(job))
+			end
+		else
+			table.insert(ids, getBridgeId(bridge))
+		end
+
+		return ids
+	end
+
+	local function markProcessed(bridge)
+		for _, id in ipairs(getJobIds(bridge)) do
+			processed[id] = true
+		end
+	end
+
 	local function resultFileAlreadyExists(bridge)
 		local resultFile = tostring(bridge.ResultFile or "")
 
@@ -170,7 +191,17 @@ return function(ctx)
 		return true
 	end
 
-	local function findPlayer(name)
+	local function findPlayer(name, userId)
+		userId = tonumber(userId)
+
+		if userId then
+			for _, plr in ipairs(Players:GetPlayers()) do
+				if plr.UserId == userId then
+					return plr
+				end
+			end
+		end
+
 		name = tostring(name or ""):lower()
 
 		if name == "" then
@@ -179,16 +210,16 @@ return function(ctx)
 
 		for _, plr in ipairs(Players:GetPlayers()) do
 			if plr.Name:lower() == name or plr.DisplayName:lower() == name then
+				if userId and plr.UserId ~= userId then
+					return nil
+				end
+
 				return plr
 			end
 		end
 
-		for _, plr in ipairs(Players:GetPlayers()) do
-			if plr.Name:lower():find(name, 1, true) or plr.DisplayName:lower():find(name, 1, true) then
-				return plr
-			end
-		end
-
+		-- No fuzzy/partial matching here. A valid-but-wrong buyer username must not
+		-- accidentally select a similarly named account.
 		return nil
 	end
 
@@ -205,9 +236,22 @@ return function(ctx)
 		end)
 	end
 
-	local function chooseNextJob(jobs)
+	local function failBridge(bridge, reason, extra)
+		extra = extra or {}
+		extra.BridgeId = getBridgeId(bridge)
+
+		if Logger.writeResultForBridge then
+			Logger.writeResultForBridge(bridge, false, reason, extra)
+		elseif Logger.writeResult then
+			local previousBridge = ctx.Bridge
+			ctx.Bridge = bridge
+			Logger.writeResult(false, reason, extra)
+			ctx.Bridge = previousBridge
+		end
+	end
+
+	local function cleanJobs(jobs)
 		local pending = {}
-		local ready = {}
 		local expiredCount = 0
 
 		for _, bridge in ipairs(jobs) do
@@ -227,6 +271,7 @@ return function(ctx)
 			if not valid then
 				Logger.warn("Bridge ignored:", reason)
 				processed[bridgeId] = true
+				failBridge(bridge, reason, { invalid = true })
 				continue
 			end
 
@@ -234,25 +279,88 @@ return function(ctx)
 				expiredCount += 1
 				processed[bridgeId] = true
 				Logger.warn("Bridge expired before buyer was ready:", bridgeId)
-
-				if Logger.writeResult then
-					local previousBridge = ctx.Bridge
-					ctx.Bridge = bridge
-					pcall(function()
-						Logger.writeResult(false, "deadline_expired", {
-							BridgeId = bridgeId,
-							expired = true,
-						})
-					end)
-					ctx.Bridge = previousBridge
-				end
-
+				failBridge(bridge, "deadline_expired", { expired = true })
 				continue
 			end
 
 			table.insert(pending, bridge)
+		end
 
-			if findPlayer(bridge.BuyerName) then
+		return pending, expiredCount
+	end
+
+	local function sameBuyer(a, b)
+		local au = tonumber(a.BuyerUserId or 0) or 0
+		local bu = tonumber(b.BuyerUserId or 0) or 0
+
+		if au > 0 and bu > 0 then
+			return au == bu
+		end
+
+		return tostring(a.BuyerName or ""):lower() == tostring(b.BuyerName or ""):lower()
+	end
+
+	local function minDeadline(jobs)
+		local best = nil
+
+		for _, job in ipairs(jobs) do
+			local d = tonumber(job.DeadlineUnix or 0) or 0
+
+			if d > 0 and (best == nil or d < best) then
+				best = d
+			end
+		end
+
+		return best or 0
+	end
+
+	local function makeTradeGroup(firstJob, pending)
+		if Config.QueueGroupSameBuyerTrades ~= true then
+			return firstJob
+		end
+
+		if firstJob.DeliveryMode ~= "Trade" then
+			return firstJob
+		end
+
+		local group = {}
+
+		for _, job in ipairs(pending) do
+			if job.DeliveryMode == "Trade" and sameBuyer(firstJob, job) and findPlayer(job.BuyerName, job.BuyerUserId) then
+				table.insert(group, job)
+			end
+		end
+
+		sortJobs(group)
+
+		if #group <= 1 then
+			return firstJob
+		end
+
+		local groupId = "group-" .. getBridgeId(group[1]) .. "-x" .. tostring(#group)
+		local combined = {}
+
+		for k, v in pairs(group[1]) do
+			combined[k] = v
+		end
+
+		combined.BridgeId = groupId
+		combined.Grouped = true
+		combined.GroupJobs = group
+		combined.DeliveryMode = "Trade"
+		combined.DeadlineUnix = minDeadline(group)
+
+		Logger.info("Grouped same-buyer trade jobs:", tostring(combined.BuyerName), "jobs=", #group)
+
+		return combined
+	end
+
+	local function chooseNextJob(jobs)
+		local pending, expiredCount = cleanJobs(jobs)
+		local ready = {}
+
+		for _, bridge in ipairs(pending) do
+			if findPlayer(bridge.BuyerName, bridge.BuyerUserId) then
 				table.insert(ready, bridge)
 			end
 		end
@@ -261,7 +369,12 @@ return function(ctx)
 		sortJobs(pending)
 
 		if #ready > 0 then
-			return ready[1], "buyer_ready", #pending, #ready, expiredCount
+			local selected = makeTradeGroup(ready[1], pending)
+			return selected, "buyer_ready", #pending, #ready, expiredCount
+		end
+
+		if Config.QueueProcessOnlyReadyBuyers == false and #pending > 0 then
+			return pending[1], "oldest_pending", #pending, #ready, expiredCount
 		end
 
 		return nil, "no_ready_buyers", #pending, #ready, expiredCount
@@ -270,7 +383,7 @@ return function(ctx)
 	local function runBridge(bridge)
 		local bridgeId = getBridgeId(bridge)
 
-		if processed[bridgeId] then
+		if processed[bridgeId] and not bridge.Grouped then
 			return
 		end
 
@@ -280,7 +393,7 @@ return function(ctx)
 		end
 
 		busy = true
-		processed[bridgeId] = true
+		markProcessed(bridge)
 
 		if Logger.clear then
 			Logger.clear()
@@ -291,21 +404,23 @@ return function(ctx)
 		ctx.Bridge = bridge
 		getgenv().AutoTradeBridge = bridge
 
-		local ok, result = pcall(function()
+		local ok, result, reason = pcall(function()
 			return ctx.Modules.Main.Start(ctx)
 		end)
 
 		if not ok then
 			Logger.error("Bridge run crashed:", result)
 
-			if Logger.writeResult then
-				Logger.writeResult(false, tostring(result), {
-					BridgeId = bridgeId,
+			if type(bridge.GroupJobs) == "table" and Logger.writeGroupResults then
+				Logger.writeGroupResults(bridge.GroupJobs, false, tostring(result), {
+					GroupId = bridgeId,
 					crashed = true,
 				})
+			else
+				failBridge(bridge, tostring(result), { crashed = true })
 			end
 		else
-			Logger.info("Bridge run finished:", tostring(result))
+			Logger.info("Bridge run finished:", tostring(result), tostring(reason or ""))
 		end
 
 		busy = false

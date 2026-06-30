@@ -133,6 +133,22 @@ return function(ctx)
 		end
 	end
 
+	local function dedupe(list)
+		local seen = {}
+		local out = {}
+
+		for _, value in ipairs(list) do
+			value = tostring(value)
+
+			if not seen[value] then
+				seen[value] = true
+				table.insert(out, value)
+			end
+		end
+
+		return out
+	end
+
 	local function findUuidsWithKey(itemType, itemName)
 		local uuids = {}
 
@@ -144,9 +160,6 @@ return function(ctx)
 
 		Logger.info("Item key:", itemKey)
 
-		-- IMPORTANT:
-		-- In your diagnostic, this one worked:
-		-- InventoryClient.FindItemsWithKey(LocalPlayer, "Sword", key)
 		local attempts = {
 			{
 				name = "dot player/type/key",
@@ -171,7 +184,7 @@ return function(ctx)
 			end
 		end
 
-		return uuids
+		return dedupe(uuids)
 	end
 
 	local function findUuidsFallback(itemType, itemName)
@@ -222,7 +235,7 @@ return function(ctx)
 			end
 		end
 
-		return uuids
+		return dedupe(uuids)
 	end
 
 	local function debugInventory(itemType)
@@ -259,16 +272,9 @@ return function(ctx)
 		Logger.warn("Total inventory items in", itemType, "=", count)
 	end
 
-	function InventoryUtil.findTradableItem(itemType, itemName)
-		itemType = clean(itemType)
-		itemName = clean(itemName)
-
-		Logger.info("Searching inventory:", itemType, itemName)
-
-		if itemType == "" or itemName == "" then
-			Logger.warn("Missing itemType/itemName.")
-			return nil
-		end
+	local function selectTradableItems(itemType, itemName, quantity, excluded)
+		quantity = math.max(1, tonumber(quantity or 1) or 1)
+		excluded = excluded or {}
 
 		local uuids = findUuidsWithKey(itemType, itemName)
 
@@ -279,24 +285,66 @@ return function(ctx)
 			Logger.info("Fallback UUID matches:", #uuids)
 		end
 
+		local selected = {}
+
 		for _, uuid in ipairs(uuids) do
-			local rawItem = getInventoryItem(itemType, uuid)
+			if not excluded[uuid] then
+				local rawItem = getInventoryItem(itemType, uuid)
 
-			if isTradable(rawItem) then
-				Logger.info("Selected inventory UUID:", uuid)
+				if isTradable(rawItem) then
+					Logger.info("Selected inventory UUID:", uuid)
 
-				return {
-					UUID = uuid,
-					ItemType = itemType,
-					ItemName = itemName,
-					RawItem = rawItem,
-				}
-			else
-				Logger.warn("Skipping locked/untradable UUID:", uuid)
+					table.insert(selected, {
+						UUID = uuid,
+						ItemType = itemType,
+						ItemName = itemName,
+						RawItem = rawItem,
+					})
+
+					excluded[uuid] = true
+
+					if #selected >= quantity then
+						return selected
+					end
+				else
+					Logger.warn("Skipping locked/untradable UUID:", uuid)
+				end
 			end
 		end
 
+		return selected
+	end
+
+	function InventoryUtil.findTradableItems(itemType, itemName, quantity, excluded)
+		itemType = clean(itemType)
+		itemName = clean(itemName)
+		quantity = math.max(1, tonumber(quantity or 1) or 1)
+
+		Logger.info("Searching inventory:", itemType, itemName, "quantity", quantity)
+
+		if itemType == "" or itemName == "" then
+			Logger.warn("Missing itemType/itemName.")
+			return nil, "missing_item_type_or_name"
+		end
+
+		local selected = selectTradableItems(itemType, itemName, quantity, excluded)
+
+		if #selected >= quantity then
+			return selected
+		end
+
+		Logger.warn("Not enough tradable copies:", itemType, itemName, "needed", quantity, "found", #selected)
 		debugInventory(itemType)
+
+		return nil, "not_enough_tradable_copies", selected
+	end
+
+	function InventoryUtil.findTradableItem(itemType, itemName)
+		local items = InventoryUtil.findTradableItems(itemType, itemName, 1)
+
+		if type(items) == "table" and items[1] then
+			return items[1]
+		end
 
 		return nil
 	end

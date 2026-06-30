@@ -402,6 +402,20 @@ return function(ctx)
 		return deepContains(items, uuid)
 	end
 
+	function TradeState.offerContainsAllItems(localUserId, uuids)
+		if type(uuids) ~= "table" then
+			return TradeState.offerContainsItem(localUserId, uuids)
+		end
+
+		for _, uuid in ipairs(uuids) do
+			if not TradeState.offerContainsItem(localUserId, uuid) then
+				return false, uuid
+			end
+		end
+
+		return true
+	end
+
 	function TradeState.waitItemInOffer(localUserId, uuid, timeout)
 		timeout = tonumber(timeout or 8) or 8
 
@@ -443,7 +457,7 @@ return function(ctx)
 		return false, "local_ready_timeout"
 	end
 
-	function TradeState.waitBuyerReady(buyerUserId, localUserId, uuid, timeout)
+	function TradeState.waitBuyerReady(buyerUserId, localUserId, uuids, timeout)
 		timeout = tonumber(timeout or 60) or 60
 
 		local start = os.clock()
@@ -454,8 +468,10 @@ return function(ctx)
 				return false, "trade_closed"
 			end
 
-			if not TradeState.offerContainsItem(localUserId, uuid) then
-				return false, "our_item_removed_or_missing"
+			local allPresent, missingUuid = TradeState.offerContainsAllItems(localUserId, uuids)
+
+			if not allPresent then
+				return false, "our_item_removed_or_missing:" .. tostring(missingUuid)
 			end
 
 			if TradeState.isReady(buyerUserId) then
@@ -498,7 +514,7 @@ return function(ctx)
 		return false, "local_confirm_timeout"
 	end
 
-	function TradeState.waitBuyerConfirmedOrProcessing(buyerUserId, localUserId, uuid, timeout)
+	function TradeState.waitBuyerConfirmedOrProcessing(buyerUserId, localUserId, uuids, timeout)
 		timeout = tonumber(timeout or 60) or 60
 
 		local start = os.clock()
@@ -513,8 +529,10 @@ return function(ctx)
 				return false, "trade_closed_before_completed"
 			end
 
-			if not TradeState.offerContainsItem(localUserId, uuid) then
-				return false, "our_item_removed_or_missing"
+			local allPresent, missingUuid = TradeState.offerContainsAllItems(localUserId, uuids)
+
+			if not allPresent then
+				return false, "our_item_removed_or_missing:" .. tostring(missingUuid)
 			end
 
 			if TradeState.isProcessing() then
