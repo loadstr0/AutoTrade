@@ -3,6 +3,7 @@
 return function(ctx)
 	local TradeMain = {}
 
+	local Players = ctx.Services.Players
 	local PlayersUtil = ctx.Modules.PlayersUtil
 	local InventoryUtil = ctx.Modules.InventoryUtil
 	local TradeActions = ctx.Modules.TradeActions
@@ -70,45 +71,61 @@ return function(ctx)
 
 		return nil
 	end
-	
+
+	local function secondsUntilDeadline(config)
+		local deadline = tonumber(config.DeadlineUnix or 0) or 0
+
+		if deadline <= 0 then
+			return nil
+		end
+
+		return math.max(0, deadline - os.time())
+	end
+
 	local function findBuyer(config)
 		local buyer = PlayersUtil.findPlayer(config.BuyerName)
-	
+
 		if not buyer then
 			return nil, "buyer_not_found"
 		end
-	
+
 		return buyer
 	end
-	
+
 	local function waitForBuyer(config)
-		local timeout = cfgNumber(config, "TradeBuyerJoinTimeout", 300)
+		local timeout = cfgNumber(config, "TradeBuyerJoinTimeout", 19 * 60)
+		local remaining = secondsUntilDeadline(config)
+
+		if remaining ~= nil then
+			timeout = math.max(1, math.min(timeout, remaining))
+		end
+
 		local pollSeconds = cfgNumber(config, "TradeBuyerJoinPollSeconds", 2)
-	
+
 		Logger.info("Waiting for buyer to join server:")
 		Logger.info("  BuyerName =", tostring(config.BuyerName))
 		Logger.info("  Timeout =", timeout)
-	
+
 		local start = os.clock()
 		local lastLog = 0
-	
+
 		while os.clock() - start < timeout do
 			local buyer = PlayersUtil.findPlayer(config.BuyerName)
-	
+
 			if buyer then
 				Logger.info("Buyer joined/found:", buyer.Name, buyer.UserId)
 				return buyer
 			end
-	
+
 			if os.clock() - lastLog >= 10 then
 				local left = math.max(0, math.floor(timeout - (os.clock() - start)))
 				Logger.info("Still waiting for buyer to join...", left, "seconds left")
 				lastLog = os.clock()
 			end
-	
+
 			task.wait(pollSeconds)
 		end
-	
+
 		return nil, "buyer_join_timeout"
 	end
 
@@ -122,13 +139,10 @@ return function(ctx)
 		task.wait(1)
 	end
 
-	local function failAttempt(reason)
-		Logger.warn("Trade attempt failed:", tostring(reason))
-		return false, reason
-	end
-
 	local function shouldRetry(reason)
-		local retryable = {
+		reason = tostring(reason or "")
+
+		local retryableExact = {
 			buyer_join_timeout = true,
 			buyer_not_found = true,
 			trade_open_timeout = true,
@@ -143,9 +157,35 @@ return function(ctx)
 			local_confirm_timeout = true,
 			trade_canceled = true,
 			trade_reverted = true,
+			trade_closed_after_processing_without_completion_signal = true,
 		}
 
-		return retryable[tostring(reason)] == true
+		if retryableExact[reason] then
+			return true
+		end
+
+		if reason:find("trade_request_failed", 1, true) then
+			return true
+		end
+
+		if reason:find("confirm_timeout", 1, true) then
+			return true
+		end
+
+		return false
+	end
+
+	local function checkQuantitySupported(config)
+		local quantity = tonumber(config.Quantity or 1) or 1
+		local orderQuantity = tonumber(config.OrderQuantity or 1) or 1
+		local totalQuantity = math.max(quantity, orderQuantity)
+
+		if totalQuantity > 1 and not cfgBool(config, "AllowMultiQuantityTrade", false) then
+			Logger.warn("Multiple quantity orders are not safely supported yet:", totalQuantity)
+			return false, "multi_quantity_not_supported_yet"
+		end
+
+		return true
 	end
 
 	local function waitCountdownOrFail(config)
@@ -242,6 +282,11 @@ return function(ctx)
 	end
 
 	local function confirmAndVerify(config, localUserId)
+		if cfgBool(config, "RequireManualConfirm", false) then
+			Logger.warn("RequireManualConfirm is true. Stopping before confirm.")
+			return false, "manual_confirm_required"
+		end
+
 		local autoConfirm = cfgBool(config, "TradeAutoConfirm", true)
 
 		if not autoConfirm then
@@ -323,12 +368,31 @@ return function(ctx)
 		return true
 	end
 
+	local function closeCompletedPopup(config)
+		if not cfgBool(config, "CloseCompletedPopup", true) then
+			return
+		end
+
+		if not TradeState.closeCompletedPopup then
+			Logger.warn("TradeState.closeCompletedPopup missing.")
+			return
+		end
+
+		local ok, reason = TradeState.closeCompletedPopup(cfgNumber(config, "CompletedPopupTimeout", 8))
+
+		if ok then
+			Logger.info("Closed completed popup:", tostring(reason))
+		else
+			Logger.warn("Could not close completed popup:", tostring(reason))
+		end
+	end
+
 	local function runSingleAttempt(config, buyer, item, uuid)
 		if TradeState.resetStatus then
 			TradeState.resetStatus()
 		end
 
-		local localUserId = tostring(game:GetService("Players").LocalPlayer.UserId)
+		local localUserId = tostring(Players.LocalPlayer.UserId)
 		local buyerUserId = getUserIdString(buyer)
 
 		if not buyerUserId then
@@ -415,6 +479,8 @@ return function(ctx)
 			return false, finalReason
 		end
 
+		closeCompletedPopup(config)
+
 		return true, "trade_complete"
 	end
 
@@ -422,6 +488,10 @@ return function(ctx)
 		local config = getConfig()
 
 		Logger.info("Starting secure trade delivery.")
+
+		if not cfgBool(config, "AllowTrade", true) then
+			return false, "trade_disabled_by_config"
+		end
 
 		if not config.BuyerName or config.BuyerName == "" then
 			return false, "missing_buyer_name"
@@ -435,12 +505,18 @@ return function(ctx)
 			return false, "missing_item_type"
 		end
 
+		local qtyOk, qtyReason = checkQuantitySupported(config)
+
+		if not qtyOk then
+			return false, qtyReason
+		end
+
 		local buyer, buyerReason = waitForBuyer(config)
-		
+
 		if not buyer then
 			return false, buyerReason
 		end
-		
+
 		Logger.info("Buyer found:", buyer.Name, buyer.UserId)
 
 		local joinCooldown = cfgNumber(config, "TradeJoinCooldown", 30)
@@ -450,11 +526,11 @@ return function(ctx)
 			task.wait(joinCooldown)
 
 			buyer, buyerReason = findBuyer(config)
-			
+
 			if not buyer then
 				Logger.warn("Buyer left during join cooldown. Waiting again...")
 				buyer, buyerReason = waitForBuyer(config)
-			
+
 				if not buyer then
 					return false, "buyer_left_during_join_cooldown"
 				end
@@ -488,7 +564,12 @@ return function(ctx)
 			buyer, buyerReason = findBuyer(config)
 
 			if not buyer then
-				return false, "buyer_left_before_trade_request"
+				Logger.warn("Buyer left before trade request. Waiting again...")
+				buyer, buyerReason = waitForBuyer(config)
+
+				if not buyer then
+					return false, "buyer_left_before_trade_request"
+				end
 			end
 
 			local ok, reason = runSingleAttempt(config, buyer, item, uuid)

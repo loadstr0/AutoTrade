@@ -53,9 +53,35 @@ return function(ctx)
 		return safeGet(trade, "TradeId")
 	end
 
+	local function serializeSmall(value, depth)
+		depth = depth or 0
+
+		if depth > 2 then
+			return "..."
+		end
+
+		if type(value) ~= "table" then
+			return tostring(value)
+		end
+
+		local parts = {}
+		local count = 0
+
+		for k, v in pairs(value) do
+			count += 1
+			table.insert(parts, tostring(k) .. "=" .. serializeSmall(v, depth + 1))
+
+			if count >= 12 then
+				table.insert(parts, "...")
+				break
+			end
+		end
+
+		return "{" .. table.concat(parts, ", ") .. "}"
+	end
+
 	local function parseStatus(...)
 		local args = { ... }
-
 		lastStatusRaw = args
 
 		for _, value in ipairs(args) do
@@ -109,7 +135,7 @@ return function(ctx)
 				lastStatus = status
 				Logger.info("TradeStatus event:", status)
 			else
-				Logger.warn("TradeStatus event unknown args:", tostring(lastStatusRaw))
+				Logger.warn("TradeStatus event unknown args:", serializeSmall(lastStatusRaw))
 			end
 		end)
 	end
@@ -182,8 +208,51 @@ return function(ctx)
 		return false
 	end
 
+	local function clickGuiButton(button)
+		if not button then
+			return false
+		end
+
+		if typeof(firesignal) == "function" then
+			local ok = pcall(function()
+				firesignal(button.Activated)
+			end)
+
+			if ok then
+				return true
+			end
+		end
+
+		if typeof(getconnections) == "function" then
+			local ok = pcall(function()
+				for _, connection in ipairs(getconnections(button.Activated)) do
+					connection:Fire()
+				end
+			end)
+
+			if ok then
+				return true
+			end
+		end
+
+		local ok = pcall(function()
+			local VirtualInputManager = game:GetService("VirtualInputManager")
+			local pos = button.AbsolutePosition + (button.AbsoluteSize / 2)
+
+			VirtualInputManager:SendMouseButtonEvent(pos.X, pos.Y, 0, true, game, 1)
+			task.wait(0.05)
+			VirtualInputManager:SendMouseButtonEvent(pos.X, pos.Y, 0, false, game, 1)
+		end)
+
+		return ok
+	end
+
 	function TradeState.getTrade()
 		return getTrade()
+	end
+
+	function TradeState.getLastStatus()
+		return lastStatus
 	end
 
 	function TradeState.getLocalUserIdString()
@@ -412,6 +481,10 @@ return function(ctx)
 
 		while os.clock() - start < timeout do
 			if not getTrade() then
+				if lastStatus == "Completed" then
+					return true
+				end
+
 				return false, "trade_closed"
 			end
 
@@ -463,6 +536,74 @@ return function(ctx)
 		return false, "buyer_confirm_timeout"
 	end
 
+	function TradeState.completedPopupVisible()
+		local playerGui = LocalPlayer:FindFirstChildOfClass("PlayerGui")
+
+		if not playerGui then
+			return false
+		end
+
+		for _, obj in ipairs(playerGui:GetDescendants()) do
+			if obj:IsA("TextLabel") or obj:IsA("TextButton") then
+				local text = tostring(obj.Text or ""):lower()
+
+				if text:find("trade with", 1, true) and text:find("completed", 1, true) then
+					return true
+				end
+			end
+		end
+
+		return false
+	end
+
+	function TradeState.closeCompletedPopup(timeout)
+		timeout = tonumber(timeout or 8) or 8
+
+		local playerGui = LocalPlayer:FindFirstChildOfClass("PlayerGui")
+
+		if not playerGui then
+			return false, "no_player_gui"
+		end
+
+		local start = os.clock()
+
+		while os.clock() - start < timeout do
+			local foundCompletedText = false
+			local okButton = nil
+
+			for _, obj in ipairs(playerGui:GetDescendants()) do
+				if obj:IsA("TextLabel") or obj:IsA("TextButton") then
+					local text = tostring(obj.Text or ""):lower()
+
+					if text:find("trade with", 1, true) and text:find("completed", 1, true) then
+						foundCompletedText = true
+					end
+
+					if text == "ok!" or text == "ok" then
+						if obj:IsA("GuiButton") then
+							okButton = obj
+						end
+					end
+				end
+			end
+
+			if foundCompletedText and okButton then
+				Logger.info("Trade completed popup found. Pressing OK.")
+				local clicked = clickGuiButton(okButton)
+
+				if clicked then
+					return true, "clicked_ok"
+				end
+
+				return false, "ok_click_failed"
+			end
+
+			task.wait(0.25)
+		end
+
+		return false, "completed_popup_not_found"
+	end
+
 	function TradeState.waitFinalResult(timeout)
 		timeout = tonumber(timeout or 30) or 30
 
@@ -471,11 +612,15 @@ return function(ctx)
 
 		while os.clock() - start < timeout do
 			if lastStatus == "Completed" then
-				return true, "completed"
+				return true, "completed_status"
 			end
 
 			if lastStatus == "Canceled" or lastStatus == "Reverted" then
 				return false, "trade_" .. string.lower(lastStatus)
+			end
+
+			if TradeState.completedPopupVisible() then
+				return true, "completed_popup"
 			end
 
 			if TradeState.isProcessing() then
@@ -483,7 +628,26 @@ return function(ctx)
 			end
 
 			if sawProcessing and not getTrade() then
-				return true, "trade_closed_after_processing"
+				if TradeState.completedPopupVisible() then
+					return true, "closed_after_processing_with_popup"
+				end
+
+				-- Give popup/status a short moment to appear.
+				local graceStart = os.clock()
+
+				while os.clock() - graceStart < 5 do
+					if lastStatus == "Completed" or TradeState.completedPopupVisible() then
+						return true, "closed_after_processing_completed"
+					end
+
+					if lastStatus == "Canceled" or lastStatus == "Reverted" then
+						return false, "trade_" .. string.lower(lastStatus)
+					end
+
+					task.wait(0.25)
+				end
+
+				return false, "trade_closed_after_processing_without_completion_signal"
 			end
 
 			task.wait(0.25)

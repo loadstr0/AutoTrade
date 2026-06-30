@@ -3,7 +3,7 @@
 return function(ctx)
 	local Config = {}
 
-	-- Runtime values from Python bridge.
+	-- Bridge/default payload fields. These are usually overwritten by Python JSON.
 	Config.BuyerName = nil
 	Config.ItemName = nil
 	Config.ItemType = nil
@@ -19,6 +19,9 @@ return function(ctx)
 	Config.OrderUrl = nil
 	Config.Price = nil
 	Config.ResultFile = nil
+	Config.BridgeId = nil
+	Config.CreatedAt = nil
+	Config.DeadlineUnix = nil
 
 	-- Defaults
 	Config.DefaultDeliveryMode = "Trade"
@@ -28,16 +31,13 @@ return function(ctx)
 	Config.AllowTrade = true
 
 	-- Gift/token safety.
-	-- Default is SAFE: resolves and logs only. No tokens spent.
-	-- For real token orders, Python/Lua bridge must pass:
-	-- GiftDryRun = false
-	-- AllowTokenSpend = true
+	-- SAFE by default: no token spending unless Python/bridge explicitly turns this off/on.
 	Config.GiftWithTokens = true
 	Config.GiftDryRun = true
-	Config.AllowTokenSpend = true
+	Config.AllowTokenSpend = false
 	Config.GiftMessage = ""
 	Config.RequireTokenBalanceDecrease = true
-	Config.AssumeGiftSuccessWithoutTokenRead = true
+	Config.AssumeGiftSuccessWithoutTokenRead = false
 	Config.ConfirmTokenSpendTimeout = 12
 
 	-- General behavior
@@ -46,7 +46,39 @@ return function(ctx)
 	Config.BuyerWaitTimeout = math.huge
 	Config.PrintDebug = true
 
-	-- Trade timing
+	-- Lua buyer waiting / queue behavior
+	Config.TradeBuyerJoinTimeout = 19 * 60
+	Config.TradeBuyerJoinPollSeconds = 2
+
+	-- Trade timing / safety
+	Config.TradeJoinCooldown = 30
+	Config.TradeRequestRetries = 5
+	Config.TradeRequestRetryDelay = 3
+
+	Config.TradeOpenTimeout = 15
+	Config.TradeItemVerifyTimeout = 8
+	Config.TradeCountdownTimeout = 12
+
+	Config.TradeLocalReadyTimeout = 8
+	Config.TradeBuyerReadyTimeout = 60
+
+	Config.TradeConfirmRetryTimeout = 15
+	Config.TradeLocalConfirmTimeout = 8
+	Config.TradeBuyerConfirmTimeout = 60
+	Config.TradeFinalTimeout = 30
+
+	Config.TradeClearBeforeAdd = true
+	Config.TradeAutoConfirm = true
+	Config.RequireManualConfirm = false
+
+	-- Quantity safety: keep false until multi-item trades are implemented and tested.
+	Config.AllowMultiQuantityTrade = false
+
+	-- Completed popup
+	Config.CloseCompletedPopup = true
+	Config.CompletedPopupTimeout = 8
+
+	-- Old fallback values. Safe to keep for older modules.
 	Config.TimeoutTradeAccept = 15
 	Config.TimeoutFinalComplete = 45
 	Config.MaxAddAttempts = 10
@@ -57,90 +89,92 @@ return function(ctx)
 	Config.MaxGiftAttempts = 1
 	Config.GiftRetryDelay = 1
 
-	Config.TradeJoinCooldown = 20
+	local function shallowCopyWithoutFunctions(source)
+		local copy = {}
 
-	Config.TradeRequestRetries = 5
-	Config.TradeRequestRetryDelay = 3
-	Config.TradeOpenTimeout = 12
-
-	-- IMPORTANT: keep this false until we have proper final-state checks.
-	Config.TradeAutoConfirm = true
-	Config.RequireManualConfirm = false
-
-	local function applyBool(fieldName, bridge, ...)
-		local keys = { ... }
-
-		for _, key in ipairs(keys) do
-			if bridge[key] ~= nil then
-				Config[fieldName] = bridge[key] == true
-				return
+		for k, v in pairs(source) do
+			if type(v) ~= "function" then
+				copy[k] = v
 			end
 		end
+
+		return copy
 	end
 
-	function Config.ApplyBridge(bridge)
-		bridge = bridge or ctx.Bridge or getgenv().AutoTradeBridge or {}
+	local function applyBridge(resolved, bridge)
+		if type(bridge) ~= "table" then
+			return resolved
+		end
 
-		Config.BuyerName = bridge.BuyerName or bridge.buyerName or bridge.buyer or Config.BuyerName
-		Config.ItemName = bridge.ItemName or bridge.itemName or bridge.item or Config.ItemName
-		Config.ItemType = bridge.ItemType or bridge.itemType or bridge.type or Config.ItemType or Config.DefaultItemType
-		Config.DeliveryMode = bridge.DeliveryMode or bridge.deliveryMode or bridge.mode or Config.DeliveryMode or Config.DefaultDeliveryMode
+		for k, v in pairs(bridge) do
+			resolved[k] = v
+		end
 
-		Config.ProductId = tonumber(bridge.ProductId or bridge.productId or Config.ProductId)
-		Config.ProductName = bridge.ProductName or bridge.productName or bridge.product or Config.ProductName
-
-		Config.Quantity = tonumber(bridge.Quantity or bridge.quantity or Config.Quantity) or Config.Quantity or 1
-		Config.OrderQuantity = tonumber(bridge.OrderQuantity or bridge.orderQuantity or bridge.RepeatCount or bridge.repeatCount or Config.OrderQuantity) or Config.OrderQuantity or 1
-
-		applyBool("GiftWithTokens", bridge, "GiftWithTokens", "giftWithTokens")
-		applyBool("GiftDryRun", bridge, "GiftDryRun", "giftDryRun")
-		applyBool("AllowTokenSpend", bridge, "AllowTokenSpend", "allowTokenSpend")
-		applyBool("RequireTokenBalanceDecrease", bridge, "RequireTokenBalanceDecrease", "requireTokenBalanceDecrease")
-		applyBool("AssumeGiftSuccessWithoutTokenRead", bridge, "AssumeGiftSuccessWithoutTokenRead", "assumeGiftSuccessWithoutTokenRead")
-		applyBool("AllowTrade", bridge, "AllowTrade", "allowTrade")
-
-		Config.GiftMessage = bridge.GiftMessage or bridge.giftMessage or Config.GiftMessage or ""
-		Config.OrderTitle = bridge.OrderTitle or bridge.orderTitle or Config.OrderTitle
-		Config.OrderId = bridge.OrderId or bridge.orderId or Config.OrderId
-		Config.OrderUrl = bridge.OrderUrl or bridge.orderUrl or Config.OrderUrl
-		Config.Price = bridge.Price or bridge.price or Config.Price
-		Config.ResultFile = bridge.ResultFile or bridge.resultFile or Config.ResultFile
-
-		return Config
+		return resolved
 	end
 
-	function Config.Validate()
-		local missing = {}
-
-		if not Config.BuyerName or Config.BuyerName == "" then
-			table.insert(missing, "BuyerName")
+	local function normalize(resolved)
+		if not resolved.DeliveryMode or resolved.DeliveryMode == "" then
+			resolved.DeliveryMode = resolved.DefaultDeliveryMode or "Trade"
 		end
 
-		if not Config.DeliveryMode or Config.DeliveryMode == "" then
-			table.insert(missing, "DeliveryMode")
-		end
-
-		if Config.DeliveryMode == "Trade" then
-			if not Config.ItemName or Config.ItemName == "" then
-				table.insert(missing, "ItemName")
+		if resolved.DeliveryMode == "Trade" then
+			if not resolved.ItemType or resolved.ItemType == "" then
+				resolved.ItemType = resolved.DefaultItemType or "Sword"
 			end
-
-			if not Config.ItemType or Config.ItemType == "" then
-				table.insert(missing, "ItemType")
-			end
-		elseif Config.DeliveryMode == "Gift" then
-			if not Config.ProductId and (not Config.ProductName or Config.ProductName == "") then
-				table.insert(missing, "ProductId or ProductName")
-			end
-		else
-			table.insert(missing, "valid DeliveryMode")
 		end
 
-		if #missing > 0 then
-			return false, "Missing bridge fields: " .. table.concat(missing, ", ")
+		resolved.Quantity = tonumber(resolved.Quantity or 1) or 1
+		resolved.OrderQuantity = tonumber(resolved.OrderQuantity or 1) or 1
+
+		return resolved
+	end
+
+	function Config.Resolve(overrideCtx)
+		local useCtx = overrideCtx or ctx or {}
+		local resolved = shallowCopyWithoutFunctions(Config)
+
+		applyBridge(resolved, useCtx.Bridge)
+		applyBridge(resolved, getgenv().AutoTradeBridge)
+
+		return normalize(resolved)
+	end
+
+	function Config.Get(overrideCtx)
+		return Config.Resolve(overrideCtx)
+	end
+
+	function Config.PrintResolved(overrideCtx, Logger)
+		local resolved = Config.Resolve(overrideCtx)
+		Logger = Logger or (overrideCtx and overrideCtx.Modules and overrideCtx.Modules.Logger)
+
+		if Logger and Logger.info then
+			Logger.info("Resolved Config:")
+
+			local keys = {
+				"BuyerName",
+				"DeliveryMode",
+				"ItemType",
+				"ItemName",
+				"ProductName",
+				"ProductId",
+				"Quantity",
+				"OrderQuantity",
+				"BridgeId",
+				"DeadlineUnix",
+				"ResultFile",
+				"TradeAutoConfirm",
+				"RequireManualConfirm",
+				"GiftDryRun",
+				"AllowTokenSpend",
+			}
+
+			for _, key in ipairs(keys) do
+				Logger.info(" ", key, "=", tostring(resolved[key]))
+			end
 		end
 
-		return true
+		return resolved
 	end
 
 	return Config
