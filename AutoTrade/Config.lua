@@ -70,6 +70,36 @@ return function(ctx)
 	Config.GiftSendDelay = 2.5
 	Config.GiftMaxSendsPerOrder = 50
 
+	-- Auto-supply / Trading Plaza procurement.
+	-- Default is scanner/dry-run mode. Turn SupplyAutoBuy=true and SupplyDryRun=false after testing.
+	Config.SupplyEnabled = true
+	Config.SupplyAutoBuy = false
+	Config.SupplyDryRun = true
+	Config.SupplyThenTrade = true
+	Config.SupplyStateFile = "autosupply_state.json"
+	Config.SupplyPostTeleportWait = 6
+	Config.SupplyRetryDelay = 1
+	Config.SupplyMaxServersPerItem = 15
+	Config.SupplyUseRecentSales = true
+	Config.SupplyRAPDaysBack = 5
+	Config.SupplyRequireTokenBalanceRead = true
+	Config.SupplyRequireTokenDecrease = true
+	Config.SupplyConfirmTokenDecreaseTimeout = 12
+	Config.SupplyInventoryVerifyTimeout = 20
+	Config.SupplyMaxTokensPerOrder = 75000
+	Config.SupplyMaxTokensPerItem = 0
+	Config.SupplyTokenReservePercent = 15
+	Config.SupplyMaxTokensPerHour = 100000
+	Config.SupplyNoSalesMultiplier = 0.95
+	Config.SupplyLowSalesMultiplier = 0.90
+	Config.SupplyMidSalesMultiplier = 0.95
+	Config.SupplyPriceRules = {
+		{ MaxRap = 500, MaxMultiplier = 1.40, MaxExtra = 150 },
+		{ MaxRap = 2000, MaxMultiplier = 1.25, MaxExtra = 300 },
+		{ MaxRap = 5000, MaxMultiplier = 1.15, MaxExtra = 500 },
+		{ MaxRap = math.huge, MaxMultiplier = 1.10, MaxExtra = 800 },
+	}
+
 	-- General behavior
 	Config.TickDelay = 0.25
 	Config.RetryDelay = 1
@@ -221,6 +251,13 @@ return function(ctx)
 		resolved.GiftRequireExactPlan = normalizeBoolean(resolved.GiftRequireExactPlan, true)
 		resolved.GiftAllowOverdelivery = normalizeBoolean(resolved.GiftAllowOverdelivery, false)
 
+		resolved.SupplyEnabled = normalizeBoolean(resolved.SupplyEnabled, true)
+		resolved.SupplyAutoBuy = normalizeBoolean(resolved.SupplyAutoBuy, false)
+		resolved.SupplyDryRun = normalizeBoolean(resolved.SupplyDryRun, true)
+		resolved.SupplyThenTrade = normalizeBoolean(resolved.SupplyThenTrade, true)
+		resolved.SupplyRequireTokenBalanceRead = normalizeBoolean(resolved.SupplyRequireTokenBalanceRead, true)
+		resolved.SupplyRequireTokenDecrease = normalizeBoolean(resolved.SupplyRequireTokenDecrease, true)
+
 		resolved.TradeAutoConfirm = normalizeBoolean(resolved.TradeAutoConfirm, true)
 		resolved.RequireManualConfirm = normalizeBoolean(resolved.RequireManualConfirm, false)
 
@@ -286,6 +323,12 @@ return function(ctx)
 				"GiftAllowOverdelivery",
 				"GiftSendDelay",
 				"GiftMaxSendsPerOrder",
+				"SupplyEnabled",
+				"SupplyAutoBuy",
+				"SupplyDryRun",
+				"SupplyThenTrade",
+				"SupplyMaxTokensPerOrder",
+				"SupplyMaxServersPerItem",
 			}
 
 			for _, key in ipairs(keys) do

@@ -53,6 +53,9 @@ return function(ctx)
 		gift_remote_fired = true,
 		gift_waiting_token_decrease = true,
 		gift_unconfirmed = true,
+		supply_buy_sent = true,
+		supply_waiting_purchase_result = true,
+		supply_purchase_unconfirmed = true,
 	}
 
 	local function shallowCopy(source)

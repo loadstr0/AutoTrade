@@ -105,6 +105,26 @@ return function(ctx)
 				Heartbeat.SetPhase("trade_start", { safeToRetry = true, dangerous = false })
 			end
 			ok, reason = ctx.Modules.TradeMain.Start(resolved)
+		elseif resolved.DeliveryMode == "Supply" then
+			if Heartbeat and Heartbeat.SetPhase then
+				Heartbeat.SetPhase("supply_start", { safeToRetry = true, dangerous = false })
+			end
+			ok, reason = ctx.Modules.SupplyMain.Start(resolved)
+		elseif resolved.DeliveryMode == "SupplyThenTrade" then
+			if Heartbeat and Heartbeat.SetPhase then
+				Heartbeat.SetPhase("supply_then_trade_start", { safeToRetry = true, dangerous = false })
+			end
+
+			local supplyOk, supplyReason = ctx.Modules.SupplyMain.EnsureStock(resolved)
+			if supplyOk then
+				if Heartbeat and Heartbeat.SetPhase then
+					Heartbeat.SetPhase("trade_start_after_supply", { safeToRetry = true, dangerous = false })
+				end
+				resolved.DeliveryMode = "Trade"
+				ok, reason = ctx.Modules.TradeMain.Start(resolved)
+			else
+				ok, reason = false, supplyReason or "supply_failed"
+			end
 		else
 			ok = false
 			reason = "unknown_delivery_mode"

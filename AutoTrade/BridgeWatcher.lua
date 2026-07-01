@@ -173,7 +173,7 @@ return function(ctx)
 			return false, "missing DeliveryMode"
 		end
 
-		if bridge.DeliveryMode == "Trade" then
+		if bridge.DeliveryMode == "Trade" or bridge.DeliveryMode == "Supply" or bridge.DeliveryMode == "SupplyThenTrade" then
 			if not bridge.ItemName or bridge.ItemName == "" then
 				return false, "missing ItemName"
 			end
@@ -361,7 +361,9 @@ return function(ctx)
 		local ready = {}
 
 		for _, bridge in ipairs(pending) do
-			if findPlayer(bridge.BuyerName, bridge.BuyerUserId) then
+			if bridge.DeliveryMode == "Supply" or bridge.DeliveryMode == "SupplyThenTrade" then
+				table.insert(ready, bridge)
+			elseif findPlayer(bridge.BuyerName, bridge.BuyerUserId) then
 				table.insert(ready, bridge)
 			end
 		end
