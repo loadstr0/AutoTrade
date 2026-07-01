@@ -4,6 +4,7 @@ return function(ctx)
 	local Heartbeat = {}
 
 	local Players = ctx.Services.Players
+	local ReplicatedStorage = ctx.Services.ReplicatedStorage
 	local HttpService = ctx.Services.HttpService
 
 	local HEARTBEAT_FILE = getgenv().AutoTradeHeartbeatFile or "autotrade_heartbeat.json"
@@ -14,6 +15,12 @@ return function(ctx)
 		phase = "booting",
 		safeToRetry = true,
 		dangerous = false,
+		deliveryReady = false,
+		readyReason = "booting",
+		dataLoaded = false,
+		inventoryReady = false,
+		tradeReady = false,
+		kickDetected = false,
 		message = "",
 		time = os.time(),
 		placeId = game.PlaceId,
@@ -26,6 +33,15 @@ return function(ctx)
 	}
 
 	local started = false
+	local lastReadyCheck = 0
+	local cachedReady = false
+	local cachedReadyInfo = {
+		reason = "not_checked_yet",
+		dataLoaded = false,
+		inventoryReady = false,
+		tradeReady = false,
+		kickDetected = false,
+	}
 
 	local DANGEROUS_PHASES = {
 		confirm_sent = true,
@@ -71,6 +87,174 @@ return function(ctx)
 		return nil
 	end
 
+	local function textLooksLikeKick(text)
+		text = string.lower(tostring(text or ""))
+
+		return text:find("data", 1, true) and text:find("could", 1, true) and text:find("load", 1, true)
+	end
+
+	local function scanForKickMessage()
+		local containers = {}
+
+		pcall(function()
+			table.insert(containers, game:GetService("CoreGui"))
+		end)
+
+		pcall(function()
+			local player = Players.LocalPlayer
+			if player then
+				table.insert(containers, player:FindFirstChildOfClass("PlayerGui"))
+			end
+		end)
+
+		for _, container in ipairs(containers) do
+			if container then
+				local ok, descendants = pcall(function()
+					return container:GetDescendants()
+				end)
+
+				if ok then
+					for _, obj in ipairs(descendants) do
+						if obj:IsA("TextLabel") or obj:IsA("TextButton") then
+							local okText, text = pcall(function()
+								return obj.Text
+							end)
+
+							if okText and textLooksLikeKick(text) then
+								return true, tostring(text)
+							end
+						end
+					end
+				end
+			end
+		end
+
+		return false, ""
+	end
+
+	local function checkInventoryReady(player)
+		local okClient, InventoryClient = pcall(function()
+			return require(ReplicatedStorage.Shared.Inventory.Client)
+		end)
+
+		if not okClient or type(InventoryClient) ~= "table" then
+			return false, "inventory_client_unavailable"
+		end
+
+		local okGet, data = pcall(function()
+			if type(InventoryClient.Get) == "function" then
+				return InventoryClient.Get(player)
+			end
+		end)
+
+		if okGet and data ~= nil then
+			return true, "inventory_get_ready"
+		end
+
+		local okGetInventory, inv = pcall(function()
+			if type(InventoryClient.GetInventory) == "function" then
+				return InventoryClient.GetInventory(player)
+			end
+		end)
+
+		if okGetInventory and inv ~= nil then
+			return true, "inventory_getinventory_ready"
+		end
+
+		return false, "inventory_not_loaded"
+	end
+
+	local function checkTradeReady()
+		local okInfo, TradeInfo = pcall(function()
+			return require(ReplicatedStorage.Shared.Trading.TradeInfo)
+		end)
+
+		if not okInfo or type(TradeInfo) ~= "table" then
+			return false, "tradeinfo_unavailable"
+		end
+
+		if type(TradeInfo.Remotes) ~= "table" then
+			return false, "trade_remotes_unavailable"
+		end
+
+		if not TradeInfo.Remotes.SendTradeRequest or not TradeInfo.Remotes.AddItemToTrade then
+			return false, "trade_required_remotes_missing"
+		end
+
+		return true, "trade_ready"
+	end
+
+	local function checkDeliveryReady()
+		local now = os.clock()
+
+		if now - lastReadyCheck < 1.5 then
+			return cachedReady, cachedReadyInfo
+		end
+
+		lastReadyCheck = now
+
+		local info = {
+			reason = "unknown",
+			dataLoaded = false,
+			inventoryReady = false,
+			tradeReady = false,
+			kickDetected = false,
+		}
+
+		local kicked, kickText = scanForKickMessage()
+		if kicked then
+			info.kickDetected = true
+			info.reason = "kick_message_detected:" .. string.sub(kickText, 1, 120)
+			cachedReady = false
+			cachedReadyInfo = info
+			return false, info
+		end
+
+		local player = Players.LocalPlayer
+		if not player or not player.Parent then
+			info.reason = "localplayer_missing"
+			cachedReady = false
+			cachedReadyInfo = info
+			return false, info
+		end
+
+		local okLoaded, loaded = pcall(function()
+			return game:IsLoaded()
+		end)
+
+		if not okLoaded or not loaded then
+			info.reason = "game_not_loaded"
+			cachedReady = false
+			cachedReadyInfo = info
+			return false, info
+		end
+
+		info.dataLoaded = true
+
+		local invReady, invReason = checkInventoryReady(player)
+		info.inventoryReady = invReady
+		if not invReady then
+			info.reason = invReason
+			cachedReady = false
+			cachedReadyInfo = info
+			return false, info
+		end
+
+		local tradeReady, tradeReason = checkTradeReady()
+		info.tradeReady = tradeReady
+		if not tradeReady then
+			info.reason = tradeReason
+			cachedReady = false
+			cachedReadyInfo = info
+			return false, info
+		end
+
+		info.reason = "ready"
+		cachedReady = true
+		cachedReadyInfo = info
+		return true, info
+	end
+
 	function Heartbeat.Write()
 		if typeof(writefile) ~= "function" then
 			return false, "writefile_unavailable"
@@ -78,6 +262,7 @@ return function(ctx)
 
 		local data = shallowCopy(Heartbeat.State)
 		local playerName, playerUserId = getPlayerInfo()
+		local deliveryReady, readyInfo = checkDeliveryReady()
 
 		data.alive = true
 		data.time = os.time()
@@ -86,6 +271,12 @@ return function(ctx)
 		data.jobId = game.JobId
 		data.playerName = playerName
 		data.playerUserId = playerUserId
+		data.deliveryReady = deliveryReady == true
+		data.readyReason = readyInfo.reason
+		data.dataLoaded = readyInfo.dataLoaded == true
+		data.inventoryReady = readyInfo.inventoryReady == true
+		data.tradeReady = readyInfo.tradeReady == true
+		data.kickDetected = readyInfo.kickDetected == true
 		data.safeToRetry = data.safeToRetry ~= false
 		data.dangerous = data.dangerous == true
 

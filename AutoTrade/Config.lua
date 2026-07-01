@@ -40,10 +40,11 @@ return function(ctx)
 	Config.QueueProcessOnlyReadyBuyers = true
 	Config.QueueFailExpiredJobs = true
 
-	-- Heartbeat / crash recovery
+	-- Heartbeat / crash/data-load recovery
 	Config.HeartbeatFile = "autotrade_heartbeat.json"
 	Config.HeartbeatSeconds = 3
 	Config.MarkDangerousAfterConfirm = true
+	Config.RequireSellerDataReady = true
 
 	-- Trade safety
 	Config.AllowTrade = true
