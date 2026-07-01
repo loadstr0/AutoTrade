@@ -1,4 +1,7 @@
 -- AutoTrade/SupplyState.lua
+-- Max-safety persistent state for Trading Plaza auto-supply.
+-- Never hides an unknown/dangerous purchase state. If the script crashes after a buy is sent,
+-- the next run must verify/manual-check; it must not blindly buy again.
 
 return function(ctx)
 	local SupplyState = {}
@@ -6,39 +9,98 @@ return function(ctx)
 	local HttpService = ctx.Services.HttpService
 	local Logger = ctx.Modules.Logger
 
-	local DEFAULT_FILE = "autosupply_state.json"
-	local VISITED_FILE = "autosupply_visited.json"
+	local DEFAULT_STATE_FILE = "autosupply_state.json"
+	local DEFAULT_VISITED_FILE = "autosupply_visited.json"
+	local DEFAULT_LEDGER_FILE = "autosupply_spend_ledger.json"
+
+	local DANGEROUS_STAGES = {
+		supply_buy_invoking = true,
+		supply_buy_sent = true,
+		supply_buy_sent_waiting_result = true,
+		supply_waiting_purchase_result = true,
+		supply_purchase_unconfirmed = true,
+		supply_tokens_decreased_item_missing = true,
+		supply_manual_check_required = true,
+	}
+
+	local function now()
+		return os.time()
+	end
+
+	local function str(value)
+		return tostring(value or "")
+	end
+
+	local function hasText(value)
+		return type(value) == "string" and value:gsub("%s+", "") ~= ""
+	end
 
 	local function getStateFile(config)
-		return tostring((config and config.SupplyStateFile) or DEFAULT_FILE)
+		return str((config and config.SupplyStateFile) or DEFAULT_STATE_FILE)
+	end
+
+	local function getVisitedFile(config)
+		return str((config and config.SupplyVisitedFile) or DEFAULT_VISITED_FILE)
+	end
+
+	local function getLedgerFile(config)
+		return str((config and config.SupplySpendLedgerFile) or DEFAULT_LEDGER_FILE)
+	end
+
+	local function canRead()
+		return typeof(readfile) == "function"
+	end
+
+	local function canWrite()
+		return typeof(writefile) == "function"
 	end
 
 	local function hasFile(path)
-		return typeof(isfile) == "function" and isfile(path)
+		if typeof(isfile) == "function" then
+			local ok, exists = pcall(function()
+				return isfile(path)
+			end)
+			return ok and exists == true
+		end
+		return true
 	end
 
-	local function readJson(path)
-		if typeof(readfile) ~= "function" then
+	local function readText(path)
+		if not canRead() then
 			return nil, "readfile_unavailable"
 		end
 
-		if hasFile(path) == false then
+		if not hasFile(path) then
 			return nil, "missing"
 		end
 
-		local okRead, raw = pcall(function()
+		local ok, raw = pcall(function()
 			return readfile(path)
 		end)
 
-		if not okRead or not raw or tostring(raw):gsub("%s+", "") == "" then
+		if not ok then
+			return nil, "read_failed:" .. str(raw)
+		end
+
+		raw = str(raw)
+		if not hasText(raw) then
 			return nil, "empty"
 		end
 
-		local okDecode, data = pcall(function()
+		return raw, nil
+	end
+
+	local function readJson(path)
+		local raw, err = readText(path)
+		if not raw then
+			return nil, err
+		end
+
+		local ok, data = pcall(function()
 			return HttpService:JSONDecode(raw)
 		end)
 
-		if not okDecode or type(data) ~= "table" then
+		if not ok or type(data) ~= "table" then
 			return nil, "bad_json"
 		end
 
@@ -46,44 +108,87 @@ return function(ctx)
 	end
 
 	local function writeJson(path, data)
-		if typeof(writefile) ~= "function" then
+		if not canWrite() then
 			return false, "writefile_unavailable"
 		end
 
 		local okEncode, encoded = pcall(function()
-			return HttpService:JSONEncode(data)
+			return HttpService:JSONEncode(data or {})
 		end)
 
 		if not okEncode then
-			return false, "json_encode_failed:" .. tostring(encoded)
+			return false, "json_encode_failed:" .. str(encoded)
 		end
 
-		local okWrite, err = pcall(function()
+		-- Two-step write helps avoid half-written JSON if executor/file system hiccups.
+		local tmp = path .. ".tmp"
+		local okTmp, tmpErr = pcall(function()
+			writefile(tmp, encoded)
+		end)
+
+		if not okTmp then
+			return false, "tmp_write_failed:" .. str(tmpErr)
+		end
+
+		local okFinal, finalErr = pcall(function()
 			writefile(path, encoded)
 		end)
 
-		if not okWrite then
-			return false, tostring(err)
+		if not okFinal then
+			return false, "final_write_failed:" .. str(finalErr)
 		end
 
 		return true
 	end
 
 	local function bridgeIdOf(config)
-		return tostring((config and config.BridgeId) or "")
+		return str((config and config.BridgeId) or "")
+	end
+
+	function SupplyState.IsDangerous(state)
+		if type(state) ~= "table" then
+			return false
+		end
+
+		if state.Dangerous == true or state.safeToRetry == false or state.SafeToRetry == false then
+			return true
+		end
+
+		return DANGEROUS_STAGES[str(state.Stage)] == true
+	end
+
+	function SupplyState.LoadRaw(config)
+		local data = readJson(getStateFile(config))
+		if type(data) ~= "table" then
+			return nil
+		end
+		return data
 	end
 
 	function SupplyState.Load(config)
-		local data = readJson(getStateFile(config))
+		local data = SupplyState.LoadRaw(config)
 		if type(data) ~= "table" then
 			return nil
 		end
 
 		local currentBridgeId = bridgeIdOf(config)
-		local stateBridgeId = tostring(data.BridgeId or "")
+		local stateBridgeId = str(data.BridgeId)
 
 		if currentBridgeId ~= "" and stateBridgeId ~= "" and currentBridgeId ~= stateBridgeId then
-			Logger.warn("Ignoring stale supply state for different BridgeId:", stateBridgeId, "current", currentBridgeId)
+			if SupplyState.IsDangerous(data) and (not config or config.SupplyDangerousStateBlocksNewOrders ~= false) then
+				Logger.error("Blocking new supply job because stale dangerous supply state exists:", stateBridgeId, "current", currentBridgeId)
+				return {
+					Stage = "stale_dangerous_block",
+					Dangerous = true,
+					SafeToRetry = false,
+					BridgeId = currentBridgeId,
+					StaleBridgeId = stateBridgeId,
+					StaleStage = data.Stage,
+					StaleState = data,
+				}
+			end
+
+			Logger.warn("Ignoring stale non-dangerous supply state:", stateBridgeId, "current", currentBridgeId)
 			return nil
 		end
 
@@ -93,21 +198,33 @@ return function(ctx)
 	function SupplyState.Save(config, state)
 		state = state or {}
 		state.BridgeId = state.BridgeId or bridgeIdOf(config)
-		state.UpdatedAt = os.time()
+		state.UpdatedAt = now()
 		state.PlaceId = game.PlaceId
 		state.JobId = game.JobId
+		state.Dangerous = SupplyState.IsDangerous(state)
+		state.SafeToRetry = not state.Dangerous
 
 		local ok, err = writeJson(getStateFile(config), state)
 		if ok then
-			Logger.info("Supply state saved:", tostring(state.Stage or "?"))
+			Logger.info("Supply state saved:", str(state.Stage), "dangerous=", str(state.Dangerous))
 		else
-			Logger.warn("Supply state save failed:", tostring(err))
+			Logger.warn("Supply state save failed:", str(err))
 		end
 		return ok, err
 	end
 
+	function SupplyState.MarkManualCheck(config, state, reason)
+		state = state or {}
+		state.Stage = "supply_manual_check_required"
+		state.Reason = str(reason or state.Reason or "manual_check_required")
+		state.Dangerous = true
+		state.SafeToRetry = false
+		SupplyState.Save(config, state)
+		return state
+	end
+
 	function SupplyState.Clear(config)
-		if typeof(writefile) == "function" then
+		if canWrite() then
 			pcall(function()
 				writefile(getStateFile(config), "")
 			end)
@@ -115,28 +232,81 @@ return function(ctx)
 		Logger.info("Supply state cleared.")
 	end
 
-	function SupplyState.ReadVisited()
-		local data = readJson(VISITED_FILE)
+	local function pruneMap(map, ttlSeconds)
+		local cutoff = now() - math.max(60, tonumber(ttlSeconds or 3600) or 3600)
+		local out = {}
+		for k, v in pairs(map or {}) do
+			local ts = tonumber(v)
+			if ts and ts >= cutoff then
+				out[k] = ts
+			end
+		end
+		return out
+	end
+
+	function SupplyState.ReadVisited(config)
+		local data = readJson(getVisitedFile(config))
 		if type(data) ~= "table" then
 			return {}
 		end
-		return data
+		return pruneMap(data, (config and config.SupplyVisitedTtlSeconds) or 3600)
 	end
 
-	function SupplyState.MarkVisited(guid)
-		guid = tostring(guid or "")
+	function SupplyState.MarkVisited(config, guid)
+		guid = str(guid)
 		if guid == "" then
 			return
 		end
 
-		local visited = SupplyState.ReadVisited()
-		visited[guid] = os.time()
-		writeJson(VISITED_FILE, visited)
+		local visited = SupplyState.ReadVisited(config)
+		visited[guid] = now()
+		writeJson(getVisitedFile(config), visited)
 	end
 
-	function SupplyState.ClearVisited()
-		writeJson(VISITED_FILE, {})
+	function SupplyState.ClearVisited(config)
+		writeJson(getVisitedFile(config), {})
 		Logger.info("Supply visited cache cleared.")
+	end
+
+	function SupplyState.ReadLedger(config)
+		local data = readJson(getLedgerFile(config))
+		if type(data) ~= "table" then
+			return {}
+		end
+
+		local cutoff = now() - math.max(3600, tonumber((config and config.SupplySpendLedgerTtlSeconds) or 86400) or 86400)
+		local out = {}
+		for _, row in ipairs(data) do
+			if type(row) == "table" and tonumber(row.Time or 0) and tonumber(row.Time or 0) >= cutoff then
+				table.insert(out, row)
+			end
+		end
+		return out
+	end
+
+	function SupplyState.GetSpentInLastHour(config)
+		local rows = SupplyState.ReadLedger(config)
+		local cutoff = now() - 3600
+		local total = 0
+		for _, row in ipairs(rows) do
+			if tonumber(row.Time or 0) and tonumber(row.Time or 0) >= cutoff then
+				total += tonumber(row.Price or 0) or 0
+			end
+		end
+		return total
+	end
+
+	function SupplyState.AppendSpend(config, spend)
+		local rows = SupplyState.ReadLedger(config)
+		spend = spend or {}
+		spend.Time = spend.Time or now()
+		spend.BridgeId = spend.BridgeId or bridgeIdOf(config)
+		table.insert(rows, spend)
+		local ok, err = writeJson(getLedgerFile(config), rows)
+		if not ok then
+			Logger.warn("Could not append supply spend ledger:", str(err))
+		end
+		return ok, err
 	end
 
 	return SupplyState

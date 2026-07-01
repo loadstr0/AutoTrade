@@ -53,9 +53,15 @@ return function(ctx)
 		gift_remote_fired = true,
 		gift_waiting_token_decrease = true,
 		gift_unconfirmed = true,
+		supply_buy_invoking = true,
 		supply_buy_sent = true,
+		supply_buy_sent_waiting_result = true,
 		supply_waiting_purchase_result = true,
 		supply_purchase_unconfirmed = true,
+		supply_tokens_decreased_item_missing = true,
+		supply_manual_check_required = true,
+		supply_dangerous_resume_check = true,
+		supply_stale_dangerous_block = true,
 	}
 
 	local function shallowCopy(source)

@@ -100,6 +100,30 @@ return function(ctx)
 		{ MaxRap = math.huge, MaxMultiplier = 1.10, MaxExtra = 800 },
 	}
 
+	-- Auto-supply max-safety switches. These default to strict/manual when ambiguous.
+	Config.SupplyRequireTradingPlazaServer = true
+	Config.SupplyRequireTradingFlags = true
+	Config.SupplyRequireBoothItemKey = true
+	Config.SupplyDoubleCheckListing = true
+	Config.SupplyDoubleCheckDelay = 0.75
+	Config.SupplyRequireRecentSalesForAutoBuy = true
+	Config.SupplyBlockNoSales = true
+	Config.SupplyMinSalesPerDayAutoBuy = 1
+	Config.SupplyRAPMaxRetries = 4
+	Config.SupplyRAPRetryDelay = 1.25
+	Config.SupplyMinTokenReserve = 0
+	Config.SupplyRequireExactTokenDecrease = false
+	Config.SupplyDangerousStateBlocksNewOrders = true
+	Config.SupplyVisitedTtlSeconds = 3600
+	Config.SupplyClearVisitedWhenExhausted = false
+	Config.SupplySpendLedgerFile = "autosupply_spend_ledger.json"
+	Config.SupplySpendLedgerTtlSeconds = 86400
+	Config.SupplyMaxQuantityPerOrder = 3
+	Config.SupplyAllowMultiplePurchasesPerOrder = true
+	Config.SupplyTeleportConfirmWait = 8
+	Config.SupplyReturnTeleportWait = 8
+	Config.SupplyAllowCurrentServerReturn = false
+
 	-- General behavior
 	Config.TickDelay = 0.25
 	Config.RetryDelay = 1
@@ -257,6 +281,17 @@ return function(ctx)
 		resolved.SupplyThenTrade = normalizeBoolean(resolved.SupplyThenTrade, true)
 		resolved.SupplyRequireTokenBalanceRead = normalizeBoolean(resolved.SupplyRequireTokenBalanceRead, true)
 		resolved.SupplyRequireTokenDecrease = normalizeBoolean(resolved.SupplyRequireTokenDecrease, true)
+		resolved.SupplyRequireTradingPlazaServer = normalizeBoolean(resolved.SupplyRequireTradingPlazaServer, true)
+		resolved.SupplyRequireTradingFlags = normalizeBoolean(resolved.SupplyRequireTradingFlags, true)
+		resolved.SupplyRequireBoothItemKey = normalizeBoolean(resolved.SupplyRequireBoothItemKey, true)
+		resolved.SupplyDoubleCheckListing = normalizeBoolean(resolved.SupplyDoubleCheckListing, true)
+		resolved.SupplyRequireRecentSalesForAutoBuy = normalizeBoolean(resolved.SupplyRequireRecentSalesForAutoBuy, true)
+		resolved.SupplyBlockNoSales = normalizeBoolean(resolved.SupplyBlockNoSales, true)
+		resolved.SupplyRequireExactTokenDecrease = normalizeBoolean(resolved.SupplyRequireExactTokenDecrease, false)
+		resolved.SupplyDangerousStateBlocksNewOrders = normalizeBoolean(resolved.SupplyDangerousStateBlocksNewOrders, true)
+		resolved.SupplyClearVisitedWhenExhausted = normalizeBoolean(resolved.SupplyClearVisitedWhenExhausted, false)
+		resolved.SupplyAllowMultiplePurchasesPerOrder = normalizeBoolean(resolved.SupplyAllowMultiplePurchasesPerOrder, true)
+		resolved.SupplyAllowCurrentServerReturn = normalizeBoolean(resolved.SupplyAllowCurrentServerReturn, false)
 
 		resolved.TradeAutoConfirm = normalizeBoolean(resolved.TradeAutoConfirm, true)
 		resolved.RequireManualConfirm = normalizeBoolean(resolved.RequireManualConfirm, false)
@@ -329,6 +364,16 @@ return function(ctx)
 				"SupplyThenTrade",
 				"SupplyMaxTokensPerOrder",
 				"SupplyMaxServersPerItem",
+				"SupplyRequireTradingPlazaServer",
+				"SupplyRequireTradingFlags",
+				"SupplyRequireBoothItemKey",
+				"SupplyDoubleCheckListing",
+				"SupplyRequireRecentSalesForAutoBuy",
+				"SupplyBlockNoSales",
+				"SupplyMinSalesPerDayAutoBuy",
+				"SupplyMaxTokensPerHour",
+				"SupplyTokenReservePercent",
+				"SupplyMaxQuantityPerOrder",
 			}
 
 			for _, key in ipairs(keys) do
