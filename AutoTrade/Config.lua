@@ -62,6 +62,14 @@ return function(ctx)
 	Config.AssumeGiftSuccessWithoutTokenRead = false
 	Config.ConfirmTokenSpendTimeout = 12
 
+	-- Gift spin-pack planning.
+	-- Blade Ball visible spin gift packs. Hidden/unlisted pack sizes are ignored.
+	Config.GiftAllowedSpinPacks = { 1, 10, 50, 250 }
+	Config.GiftRequireExactPlan = true
+	Config.GiftAllowOverdelivery = false
+	Config.GiftSendDelay = 2.5
+	Config.GiftMaxSendsPerOrder = 50
+
 	-- General behavior
 	Config.TickDelay = 0.25
 	Config.RetryDelay = 1
@@ -113,7 +121,7 @@ return function(ctx)
 
 	-- Gift timing
 	Config.MaxGiftAttempts = 1
-	Config.GiftRetryDelay = 1
+	Config.GiftRetryDelay = 2.5
 
 	local function shallowCopyWithoutFunctions(source)
 		local copy = {}
@@ -208,6 +216,10 @@ return function(ctx)
 		resolved.GiftWithTokens = normalizeBoolean(resolved.GiftWithTokens, true)
 		resolved.GiftDryRun = normalizeBoolean(resolved.GiftDryRun, false)
 		resolved.AllowTokenSpend = normalizeBoolean(resolved.AllowTokenSpend, true)
+		resolved.RequireTokenBalanceDecrease = normalizeBoolean(resolved.RequireTokenBalanceDecrease, true)
+		resolved.AssumeGiftSuccessWithoutTokenRead = normalizeBoolean(resolved.AssumeGiftSuccessWithoutTokenRead, false)
+		resolved.GiftRequireExactPlan = normalizeBoolean(resolved.GiftRequireExactPlan, true)
+		resolved.GiftAllowOverdelivery = normalizeBoolean(resolved.GiftAllowOverdelivery, false)
 
 		resolved.TradeAutoConfirm = normalizeBoolean(resolved.TradeAutoConfirm, true)
 		resolved.RequireManualConfirm = normalizeBoolean(resolved.RequireManualConfirm, false)
@@ -270,6 +282,10 @@ return function(ctx)
 				"AllowTokenSpend",
 				"RequireTokenBalanceDecrease",
 				"AssumeGiftSuccessWithoutTokenRead",
+				"GiftRequireExactPlan",
+				"GiftAllowOverdelivery",
+				"GiftSendDelay",
+				"GiftMaxSendsPerOrder",
 			}
 
 			for _, key in ipairs(keys) do
