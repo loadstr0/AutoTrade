@@ -123,6 +123,11 @@ return function(ctx)
 	Config.SupplyTeleportConfirmWait = 8
 	Config.SupplyReturnTeleportWait = 8
 	Config.SupplyAllowCurrentServerReturn = false
+	Config.SupplyIndexPreviewWait = 1.5
+	Config.SupplyIndexPromptWait = 12
+	Config.SupplyMaxSearchAttempts = 15
+	Config.SupplyNoDirectListingRemotes = true
+	Config.SupplyPreferIndexUIPath = true
 
 	-- General behavior
 	Config.TickDelay = 0.25

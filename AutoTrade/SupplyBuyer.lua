@@ -1,7 +1,7 @@
 -- AutoTrade/SupplyBuyer.lua
 -- Max-safety booth purchase. Uses real structures confirmed from game scripts:
 -- BoothListings entries: Type, ItemName, Item, Price. ListingId is table key.
--- Purchase remote: PurchaseBoothListing:InvokeServer({ Owner = sellerUserId, ListingId = listingId })
+-- Purchase path: BoothController:PurchaseListing(sellerPlayerInstance, listingId)
 -- Tokens: Inventory replion path "Tokens".
 
 return function(ctx)
@@ -14,7 +14,7 @@ return function(ctx)
 	local SupplyRAP = ctx.Modules.SupplyRAP
 	local SupplyPlanner = ctx.Modules.SupplyPlanner
 
-	local Net = require(ReplicatedStorage.Packages.Net)
+	local Players = game:GetService("Players")
 	local ReplionClient = require(ReplicatedStorage.Packages.Replion).Client
 	local InventoryClient = require(ReplicatedStorage.Shared.Inventory).Client
 
@@ -72,23 +72,8 @@ return function(ctx)
 		return false, "not_trading_plaza_server"
 	end
 
-	local function remoteFunction(name)
-		local ok, remote = pcall(function()
-			return Net:RemoteFunction(name)
-		end)
-		if ok and remote then
-			return remote
-		end
-		return nil
-	end
-
 	local function fireAfkPing()
-		pcall(function()
-			local ev = Net:RemoteEvent("TradePlaza/AFKRejoin")
-			if ev then
-				ev:FireServer()
-			end
-		end)
+		-- Intentionally no-op. The normal client handles AFK/teleport behavior.
 	end
 
 	local function getTokenBalance()
@@ -197,7 +182,15 @@ return function(ctx)
 		return boothListings, nil
 	end
 
-	local function getSellerBoothData(sellerUserId)
+	local function getSellerPlayer(ownerKey)
+		local userId = tonumber(ownerKey)
+		if not userId then
+			return nil
+		end
+		return Players:GetPlayerByUserId(userId)
+	end
+
+	local function getAllBoothData()
 		local boothListings, reason = getBoothListings()
 		if not boothListings then
 			return nil, reason
@@ -205,21 +198,28 @@ return function(ctx)
 
 		local data = nil
 		pcall(function()
-			data = boothListings:Get({ tostring(sellerUserId) })
+			data = boothListings:Get({})
 		end)
 		if type(data) ~= "table" then
-			pcall(function()
-				data = boothListings:Get({ sellerUserId })
-			end)
+			return nil, "booth_data_missing"
+		end
+		return data, nil
+	end
+
+	local function getSellerBoothData(sellerUserId)
+		local allData, reason = getAllBoothData()
+		if not allData then
+			return nil, reason
 		end
 
+		local data = allData[tostring(sellerUserId)] or allData[tonumber(sellerUserId)] or allData[sellerUserId]
 		if type(data) ~= "table" then
 			return nil, "seller_booth_missing"
 		end
 		return data, nil
 	end
 
-	local function listingMatches(config, state, listingId, entry, maxPrice)
+	local function listingMatches(config, state, ownerUserId, listingId, entry, maxPrice)
 		if type(entry) ~= "table" then
 			return false, "listing_entry_not_table"
 		end
@@ -259,7 +259,10 @@ return function(ctx)
 			return false, "listing_price_above_max"
 		end
 
+		local sellerPlayer = getSellerPlayer(ownerUserId)
 		return true, "match", {
+			OwnerUserId = tostring(ownerUserId),
+			SellerName = sellerPlayer and sellerPlayer.Name or nil,
 			ListingId = tostring(listingId),
 			Entry = entry,
 			Price = price,
@@ -270,19 +273,38 @@ return function(ctx)
 	end
 
 	local function collectSafeListings(config, state, maxPrice)
-		local data, dataReason = getSellerBoothData(state.SellerUserId)
-		if not data then
-			return nil, dataReason
+		local sellerTables = {}
+		local allReason = nil
+
+		if state.SellerUserId then
+			local data, dataReason = getSellerBoothData(state.SellerUserId)
+			if not data then
+				return nil, dataReason
+			end
+			sellerTables[tostring(state.SellerUserId)] = data
+		else
+			local allData, reason = getAllBoothData()
+			if not allData then
+				return nil, reason
+			end
+			allReason = reason
+			for ownerKey, listings in pairs(allData) do
+				if type(listings) == "table" and getSellerPlayer(ownerKey) then
+					sellerTables[tostring(ownerKey)] = listings
+				end
+			end
 		end
 
 		local matches = {}
 		local rejectCounts = {}
-		for listingId, entry in pairs(data) do
-			local ok, reason, info = listingMatches(config, state, listingId, entry, maxPrice)
-			if ok then
-				table.insert(matches, info)
-			else
-				rejectCounts[reason] = (rejectCounts[reason] or 0) + 1
+		for ownerUserId, data in pairs(sellerTables) do
+			for listingId, entry in pairs(data) do
+				local ok, reason, info = listingMatches(config, state, ownerUserId, listingId, entry, maxPrice)
+				if ok then
+					table.insert(matches, info)
+				else
+					rejectCounts[reason] = (rejectCounts[reason] or 0) + 1
+				end
 			end
 		end
 
@@ -291,7 +313,7 @@ return function(ctx)
 		end)
 
 		if #matches <= 0 then
-			local firstReason = "no_matching_safe_listing"
+			local firstReason = allReason or "no_matching_safe_listing"
 			for reason in pairs(rejectCounts) do
 				firstReason = reason
 				break
@@ -374,20 +396,24 @@ return function(ctx)
 	end
 
 	local function purchaseListing(ownerUserId, listingId)
-		local PurchaseBoothListing = remoteFunction("PurchaseBoothListing")
-		if not PurchaseBoothListing then
-			return false, nil, "purchase_booth_listing_remote_missing"
+		local sellerPlayer = getSellerPlayer(ownerUserId)
+		if not sellerPlayer then
+			return false, nil, "seller_player_missing_or_left_server"
+		end
+
+		local okController, BoothController = pcall(function()
+			return require(ReplicatedStorage.Controllers.Booth.BoothController)
+		end)
+		if not okController or type(BoothController) ~= "table" or type(BoothController.PurchaseListing) ~= "function" then
+			return false, nil, "booth_controller_purchase_missing"
 		end
 
 		local ok, success, message = pcall(function()
-			return PurchaseBoothListing:InvokeServer({
-				Owner = ownerUserId,
-				ListingId = listingId,
-			})
+			return BoothController:PurchaseListing(sellerPlayer, listingId)
 		end)
 
 		if not ok then
-			return false, nil, "purchase_booth_listing_error:" .. tostring(success)
+			return false, nil, "booth_controller_purchase_error:" .. tostring(success)
 		end
 
 		return true, success, message
@@ -486,7 +512,9 @@ return function(ctx)
 			return false, listingReason or "listing_not_found_or_unsafe"
 		end
 
-		Logger.info("Stable safe booth listing found:", tostring(listing.ListingId), "price", tostring(listing.Price), "key", tostring(listing.ItemKey))
+		Logger.info("Stable safe booth listing found:", tostring(listing.ListingId), "price", tostring(listing.Price), "key", tostring(listing.ItemKey), "seller", tostring(listing.OwnerUserId))
+		state.SellerUserId = listing.OwnerUserId or state.SellerUserId
+		state.SellerName = listing.SellerName or state.SellerName
 
 		local beforeTokens, tokenReason = getTokenBalance()
 		if beforeTokens == nil and config.SupplyRequireTokenBalanceRead ~= false then
@@ -547,7 +575,7 @@ return function(ctx)
 		state.RemoteMessage = tostring(remoteMessage or "")
 		SupplyState.Save(config, state)
 
-		Logger.info("PurchaseBoothListing returned:", tostring(callOk), tostring(remoteSuccess), tostring(remoteMessage))
+		Logger.info("BoothController purchase returned:", tostring(callOk), tostring(remoteSuccess), tostring(remoteMessage))
 		phase("supply_waiting_purchase_result", {
 			safeToRetry = false,
 			dangerous = true,

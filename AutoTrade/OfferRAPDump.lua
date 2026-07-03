@@ -5,17 +5,15 @@
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local HttpService = game:GetService("HttpService")
 
-local Net = require(ReplicatedStorage.Packages.Net)
 local Replion = require(ReplicatedStorage.Packages.Replion)
 local Inventory = require(ReplicatedStorage.Shared.Inventory).Client
-local RequestRAPHistory = Net:RemoteFunction("RequestRAPHistory")
 
 local OUTPUT_FILE = "autosupply_rap_cache.json"
 local WANTED_FILE = "autosupply_offer_names.json"
 local DAYS_BACK = 5
 local MAX_RETRIES = 3
 local RETRY_DELAY = 0.75
-local INCLUDE_HISTORY_FOR_WANTED = true
+local INCLUDE_HISTORY_FOR_WANTED = false -- direct RequestRAPHistory is intentionally not used
 local ITEM_TYPES = { "Sword", "Explosion", "Emote", "Ability" }
 
 local function normalize(s)
@@ -49,53 +47,9 @@ local function readWanted()
 	return wanted
 end
 
-local function dayTimestamp(dt)
-	local u = dt:ToUniversalTime()
-	return DateTime.fromUniversalTime(u.Year, u.Month, u.Day).UnixTimestamp
-end
-
 local function getHistory(itemType, itemKey)
-	local nowDt = DateTime.now()
-	local startDt = DateTime.fromUnixTimestamp(nowDt.UnixTimestamp - DAYS_BACK * 86400)
-	for attempt = 1, MAX_RETRIES do
-		local ok, success, history = pcall(function()
-			local s, h = RequestRAPHistory:InvokeServer(itemType, itemKey, startDt, nowDt)
-			return s, h
-		end)
-		if ok and success and type(history) == "table" then
-			local grouped = {}
-			local totalSales, rapTotal, rapPoints = 0, 0, 0
-			for _, row in ipairs(history) do
-				if type(row) == "table" and row.Date and row.RAP ~= nil and row.Count ~= nil then
-					local ts = row.Date.UnixTimestamp
-					if ts >= startDt.UnixTimestamp and ts <= nowDt.UnixTimestamp then
-						local day = dayTimestamp(row.Date)
-						grouped[day] = grouped[day] or { totalRap = 0, points = 0, totalSales = 0 }
-						grouped[day].totalRap += tonumber(row.RAP) or 0
-						grouped[day].points += 1
-						grouped[day].totalSales += tonumber(row.Count) or 0
-					end
-				end
-			end
-			local days = 0
-			for _, info in pairs(grouped) do
-				days += 1
-				totalSales += info.totalSales
-				rapTotal += info.totalRap
-				rapPoints += info.points
-			end
-			return {
-				Days = days,
-				DaysBack = DAYS_BACK,
-				TotalSales = totalSales,
-				AvgSalesPerDay = totalSales / math.max(DAYS_BACK, 1),
-				AvgRAP = rapPoints > 0 and math.round(rapTotal / rapPoints) or nil,
-			}
-		end
-		if attempt < MAX_RETRIES then
-			task.wait(RETRY_DELAY * attempt)
-		end
-	end
+	-- Disabled on purpose. Direct RequestRAPHistory was confirmed delayed-kick prone.
+	-- Use SupplyRAP/RAPChartController in live supply, or provide sales overrides from Python cache.
 	return nil
 end
 

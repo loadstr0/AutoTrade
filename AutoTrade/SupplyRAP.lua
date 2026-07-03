@@ -7,10 +7,8 @@ return function(ctx)
 	local ReplicatedStorage = ctx.Services.ReplicatedStorage
 	local Logger = ctx.Modules.Logger
 
-	local Net = require(ReplicatedStorage.Packages.Net)
 	local ReplionPackage = require(ReplicatedStorage.Packages.Replion)
 	local InventoryClient = require(ReplicatedStorage.Shared.Inventory).Client
-	local RequestRAPHistory = Net:RemoteFunction("RequestRAPHistory")
 
 	local function replionClient()
 		return ReplionPackage.Client or ReplionPackage
@@ -166,6 +164,29 @@ return function(ctx)
 		return DateTime.fromUniversalTime(u.Year, u.Month, u.Day).UnixTimestamp
 	end
 
+	local function readRenderedRapPoints()
+		local Players = game:GetService("Players")
+		local playerGui = Players.LocalPlayer and Players.LocalPlayer:FindFirstChild("PlayerGui")
+		if not playerGui then
+			return {}
+		end
+
+		local points = {}
+		for _, inst in ipairs(playerGui:GetDescendants()) do
+			local rap = inst:GetAttribute("RAP")
+			local count = inst:GetAttribute("Count")
+			local date = inst:GetAttribute("Date")
+			if rap ~= nil and count ~= nil then
+				table.insert(points, {
+					RAP = tonumber(rap) or 0,
+					Count = tonumber(count) or 0,
+					Date = date,
+				})
+			end
+		end
+		return points
+	end
+
 	function SupplyRAP.getRecentStats(itemType, itemName, daysBack, config)
 		daysBack = tonumber(daysBack or 5) or 5
 
@@ -174,68 +195,69 @@ return function(ctx)
 			return nil, keyReason or "item_key_failed"
 		end
 
-		local nowDt = DateTime.now()
-		local startDt = DateTime.fromUnixTimestamp(nowDt.UnixTimestamp - daysBack * 86400)
+		local okChart, RAPChartController = pcall(function()
+			return require(ReplicatedStorage.Controllers.Trading.RAPChartController)
+		end)
+		if not okChart or type(RAPChartController) ~= "table" or type(RAPChartController.Render) ~= "function" then
+			return nil, "rap_chart_controller_missing"
+		end
+
 		local maxRetries = tonumber((config and config.SupplyRAPMaxRetries) or 4) or 4
 		local retryDelay = tonumber((config and config.SupplyRAPRetryDelay) or 1.25) or 1.25
-
-		local history = nil
+		local points = nil
 		local lastReason = nil
 
 		for attempt = 1, math.max(1, maxRetries) do
-			local ok, success, result = pcall(function()
-				local s, h = RequestRAPHistory:InvokeServer(itemType, itemKey, startDt, nowDt)
-				return s, h
+			local okRender, err = pcall(function()
+				-- Normal client path. Do not call RequestRAPHistory directly.
+				RAPChartController:Render("Index", itemType, itemKey)
 			end)
 
-			if ok and success and type(result) == "table" then
-				history = result
-				break
+			if okRender then
+				task.wait(tonumber((config and config.SupplyRAPRenderWait) or 1.0) or 1.0)
+				local rendered = readRenderedRapPoints()
+				if type(rendered) == "table" and #rendered > 0 then
+					points = rendered
+					break
+				end
+				lastReason = "rap_chart_rendered_no_points"
+			else
+				lastReason = "rap_chart_render_error:" .. tostring(err)
 			end
 
-			lastReason = ok and "rap_history_rejected" or ("rap_history_error:" .. tostring(success))
 			if attempt < maxRetries then
 				task.wait(retryDelay * (2 ^ math.min(attempt - 1, 3)))
 			end
 		end
 
-		if type(history) ~= "table" then
-			return nil, lastReason or "rap_history_failed"
+		if type(points) ~= "table" or #points == 0 then
+			return nil, lastReason or "rap_chart_points_missing"
 		end
 
-		local grouped = {}
 		local totalSales = 0
 		local rapPoints = 0
 		local rapTotal = 0
 
-		for _, row in ipairs(history) do
-			if type(row) == "table" and row.Date and row.RAP ~= nil and row.Count ~= nil then
-				local ts = row.Date.UnixTimestamp
-				if ts >= startDt.UnixTimestamp and ts <= nowDt.UnixTimestamp then
-					local day = dayTimestamp(row.Date)
-					grouped[day] = grouped[day] or { totalRap = 0, points = 0, totalSales = 0 }
-					grouped[day].totalRap += tonumber(row.RAP) or 0
-					grouped[day].points += 1
-					grouped[day].totalSales += tonumber(row.Count) or 0
-				end
+		for _, row in ipairs(points) do
+			local rap = tonumber(row.RAP) or 0
+			local count = tonumber(row.Count) or 0
+			if rap > 0 then
+				rapTotal += rap
+				rapPoints += 1
 			end
-		end
-
-		local daysWithData = 0
-		for _, info in pairs(grouped) do
-			daysWithData += 1
-			totalSales += info.totalSales
-			rapTotal += info.totalRap
-			rapPoints += info.points
+			if count > 0 then
+				totalSales += count
+			end
 		end
 
 		return {
 			ItemKey = itemKey,
-			Days = daysWithData,
+			Days = math.min(#points, daysBack),
 			DaysBack = daysBack,
 			TotalSales = totalSales,
 			AvgSalesPerDay = totalSales / math.max(daysBack, 1),
 			AvgRAP = rapPoints > 0 and math.round(rapTotal / rapPoints) or nil,
+			Source = "RAPChartController.Render",
 		}, nil
 	end
 

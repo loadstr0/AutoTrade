@@ -17,39 +17,30 @@ return function(ctx)
 	end
 
 	local function scanAndTeleport(config, plan)
-		local maxServers = tonumber(config.SupplyMaxServersPerItem or 15) or 15
+		local maxAttempts = tonumber(config.SupplyMaxServersPerItem or config.SupplyMaxSearchAttempts or 15) or 15
 		local retryDelay = tonumber(config.SupplyRetryDelay or 1) or 1
 
-		for attempt = 1, maxServers do
-			phase("supply_searching", { attempt = attempt, total = maxServers, safeToRetry = true, dangerous = false })
+		for attempt = 1, maxAttempts do
+			phase("supply_index_searching", { attempt = attempt, total = maxAttempts, safeToRetry = true, dangerous = false })
 
-			local listings, listReason = SupplyScanner.getListingCandidates(config, config.ItemType, config.ItemName)
-			if type(listings) ~= "table" or #listings == 0 then
-				Logger.warn("No supply listings found yet:", tostring(listReason))
-				task.wait(retryDelay)
-				continue
-			end
-
-			local listing, reason = SupplyScanner.chooseUnvisited(config, listings)
-			if not listing then
-				Logger.warn("No unvisited supply listing:", tostring(reason))
-				if config.SupplyClearVisitedWhenExhausted == true then
-					SupplyState.ClearVisited(config)
-				end
-				task.wait(retryDelay)
-				continue
-			end
-
-			local ok, tpReason = SupplyScanner.teleportToListing(config, listing, config.ItemType, config.ItemName, plan)
+			local ok, reason = SupplyScanner.searchAndTeleportToListing(config, config.ItemType, config.ItemName, plan)
 			if ok then
 				return false, "supply_teleporting"
 			end
 
-			Logger.warn("Supply teleport failed:", tostring(tpReason))
-			task.wait(retryDelay)
+			local r = tostring(reason or "")
+			Logger.warn("Supply Index seller search failed:", r)
+
+			if r:find("no_listings", 1, true) or r:find("seller_prompt_not_found", 1, true) or r:find("index_teleport_no_server_change", 1, true) then
+				task.wait(retryDelay)
+				continue
+			end
+
+			-- Hard failures should not spin forever.
+			return false, r
 		end
 
-		return false, "supply_no_safe_listing_found"
+		return false, "supply_no_seller_found_after_retries"
 	end
 
 	local function continueAfterPurchasedReturning(config, state)

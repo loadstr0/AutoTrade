@@ -22,6 +22,8 @@ local FILES = {
 	"TradeActions",
 	"TradeMain",
 	"Main",
+	"RestockAnalyzer",
+	"RestockWatcher",
 	"BridgeWatcher",
 }
 
@@ -125,8 +127,24 @@ for _, name in ipairs(FILES) do
 	ctx.Modules[name] = loadRemote(name)
 end
 
+if getgenv().AutoTradeRestockWatch == true and ctx.Modules.RestockWatcher then
+	task.spawn(function()
+		local ok, err = pcall(function()
+			ctx.Modules.RestockWatcher.Start()
+		end)
+		if not ok then
+			warn("[AutoTradeLoader] RestockWatcher crashed:", err)
+		end
+	end)
+end
+
 if getgenv().AutoTradeWatch == true then
 	ctx.Modules.BridgeWatcher.Start()
+elseif getgenv().AutoTradeRestockWatch == true then
+	print("[AutoTradeLoader] AutoTradeWatch=false but RestockWatch=true; keeping loader alive for restock requests.")
+	while getgenv().AutoTradeStop ~= true do
+		task.wait(1)
+	end
 else
 	ctx.Bridge = loadBridgeOnce()
 	ctx.Modules.Main.Start(ctx)
