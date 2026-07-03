@@ -84,6 +84,25 @@ return function(ctx)
 		return player.Name, player.UserId
 	end
 
+	-- [AUTOTRADE HEARTBEAT TOKEN PATCH]
+	local function getLiveTokenBalance()
+		local ok, result = pcall(function()
+			local Replion = require(ReplicatedStorage.Packages.Replion)
+			local inventory = Replion.Client:WaitReplion("Inventory")
+			if inventory and type(inventory.Get) == "function" then
+				return inventory:Get("Tokens")
+			end
+			return nil
+		end)
+
+		if ok and type(result) == "number" then
+			return math.floor(result), "roblox_live_replion", ""
+		end
+
+		return nil, "unavailable", tostring(result or "could_not_read_tokens")
+	end
+	-- [/AUTOTRADE HEARTBEAT TOKEN PATCH]
+
 	local function encode(data)
 		local ok, encoded = pcall(function()
 			return HttpService:JSONEncode(data)
@@ -271,6 +290,7 @@ return function(ctx)
 
 		local data = shallowCopy(Heartbeat.State)
 		local playerName, playerUserId = getPlayerInfo()
+		local liveTokens, tokenSource, tokenError = getLiveTokenBalance()
 		local deliveryReady, readyInfo = checkDeliveryReady()
 
 		data.alive = true
@@ -280,6 +300,9 @@ return function(ctx)
 		data.jobId = game.JobId
 		data.playerName = playerName
 		data.playerUserId = playerUserId
+		data.currentTokens = liveTokens
+		data.tokenBalanceSource = tokenSource
+		data.tokenBalanceError = tokenError
 		data.deliveryReady = deliveryReady == true
 		data.readyReason = readyInfo.reason
 		data.dataLoaded = readyInfo.dataLoaded == true

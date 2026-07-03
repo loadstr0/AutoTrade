@@ -69,6 +69,25 @@ local CONFIG = {
 local HttpService = game:GetService("HttpService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Players = game:GetService("Players")
+-- [AUTOTRADE LIVE TOKEN BALANCE PATCH]
+local function getLiveTokenBalanceForRestock()
+	local ok, result = pcall(function()
+		local Replion = require(ReplicatedStorage.Packages.Replion)
+		local inventory = Replion.Client:WaitReplion("Inventory")
+		if inventory and type(inventory.Get) == "function" then
+			return inventory:Get("Tokens")
+		end
+		return nil
+	end)
+
+	if ok and type(result) == "number" then
+		return math.floor(result), "roblox_live_replion", ""
+	end
+
+	return nil, "fallback_snapshot_or_config", tostring(result or "could_not_read_live_tokens")
+end
+-- [/AUTOTRADE LIVE TOKEN BALANCE PATCH]
+
 
 local LOG_LINES = {}
 local WARN_COUNT = 0
@@ -1456,13 +1475,22 @@ local function main()
 
 	loadGameModules()
 
-	local currentTokens = tonumber(snapshot.current_tokens) or CONFIG.CurrentTokens
+	local liveTokens, tokenBalanceSource, tokenBalanceError = getLiveTokenBalanceForRestock()
+	local currentTokens = liveTokens or tonumber(snapshot.current_tokens) or CONFIG.CurrentTokens
+	if liveTokens then
+		log("INFO", "LIVE token balance used:", currentTokens, "source=", tokenBalanceSource)
+	else
+		log("WARN", "Could not read live token balance. Falling back to snapshot/config:", currentTokens, "reason=", tokenBalanceError)
+	end
 	CONFIG.TokenRatePerKUsd = tonumber(snapshot.token_rate_per_k_usd) or CONFIG.TokenRatePerKUsd
 	CONFIG.SellerFeePercent = tonumber(snapshot.seller_fee_percent) or CONFIG.SellerFeePercent
 	CONFIG.TokenReserve = tonumber(snapshot.token_reserve) or CONFIG.TokenReserve
 	log("INFO", "runtime config: tokens=", currentTokens, "rate=", CONFIG.TokenRatePerKUsd, "fee=", CONFIG.SellerFeePercent, "reserve=", CONFIG.TokenReserve)
 	local rows = buildOfferRows(snapshot)
 	local totals = allocateBudget(rows, currentTokens)
+	totals.tokenBalanceSource = tokenBalanceSource or "unknown"
+	totals.liveTokenBalance = liveTokens
+	totals.tokenBalanceError = tokenBalanceError or ""
 
 	addPythonActions(rows)
 	countPythonActions(rows, totals)

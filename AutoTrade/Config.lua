@@ -73,8 +73,8 @@ return function(ctx)
 	-- Auto-supply / Trading Plaza procurement.
 	-- Default is scanner/dry-run mode. Turn SupplyAutoBuy=true and SupplyDryRun=false after testing.
 	Config.SupplyEnabled = true
-	Config.SupplyAutoBuy = true
-	Config.SupplyDryRun = false
+	Config.SupplyAutoBuy = false
+	Config.SupplyDryRun = true
 	Config.SupplyThenTrade = true
 	Config.SupplyStateFile = "autosupply_state.json"
 	Config.SupplyPostTeleportWait = 6
@@ -112,7 +112,7 @@ return function(ctx)
 	Config.SupplyRAPMaxRetries = 4
 	Config.SupplyRAPRetryDelay = 1.25
 	Config.SupplyMinTokenReserve = 0
-	Config.SupplyRequireExactTokenDecrease = true
+	Config.SupplyRequireExactTokenDecrease = false
 	Config.SupplyDangerousStateBlocksNewOrders = true
 	Config.SupplyVisitedTtlSeconds = 3600
 	Config.SupplyClearVisitedWhenExhausted = false
