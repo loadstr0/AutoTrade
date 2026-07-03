@@ -40,6 +40,13 @@ local CONFIG = {
 	MinProfitUsdPerUnit = 0.50,
 	MinMarginPercent = 10,
 
+	-- After small spins, item offers are prioritized by buyer demand first.
+	-- The RAP chart Count attributes are summed as a recent-sales proxy.
+	-- Profit/margin filters still run before allocation, so high-sales bad-profit items stay paused.
+	PrioritizeItemSalesAfterSpins = true,
+	ItemSalesPriorityMinDifference = 1,
+	ItemDemandScoreSalesWeight = 1000000,
+
 	IncludePausedOffers = true,
 	IgnoreStatuses = {
 		Closed = true,
@@ -1074,6 +1081,8 @@ local function buildOfferRows(snapshot)
 
 			rap = rap and round(rap, 4) or nil,
 			rapInfo = rapInfo,
+			salesTotal = rapInfo and tonumber(rapInfo.totalSales) or 0,
+			demandScore = nil,
 
 			tokensPerUnit = tokensPerUnit,
 			tokenInfo = tokenInfo,
@@ -1105,6 +1114,26 @@ local function rowEfficiency(row)
 	local profit = row.profitUsdPerUnit or -999999
 	local tokens = math.max(1, row.tokensPerUnit or 1)
 	return profit / tokens
+end
+
+local function rowSales(row)
+	local sales = tonumber(row.salesTotal)
+
+	if sales == nil and row.rapInfo then
+		sales = tonumber(row.rapInfo.totalSales)
+	end
+
+	return math.max(0, sales or 0)
+end
+
+local function rowDemandScore(row)
+	-- Demand first, then efficiency/profit as tie-breakers.
+	-- Multiplying sales keeps one extra sale more important than tiny profit noise.
+	local sales = rowSales(row)
+	local eff = rowEfficiency(row)
+	local profit = row.profitUsdPerUnit or -999999
+	local salesWeight = CONFIG.ItemDemandScoreSalesWeight or 1000000
+	return sales * salesWeight + eff * 1000 + profit
 end
 
 local function isSmallSpin(row)
@@ -1139,6 +1168,23 @@ local function sortSmallSpins(a, b)
 end
 
 local function sortItems(a, b)
+	if CONFIG.PrioritizeItemSalesAfterSpins then
+		local aSales = rowSales(a)
+		local bSales = rowSales(b)
+		local minDiff = CONFIG.ItemSalesPriorityMinDifference or 1
+
+		if math.abs(aSales - bSales) >= minDiff then
+			return aSales > bSales
+		end
+
+		local aDemand = rowDemandScore(a)
+		local bDemand = rowDemandScore(b)
+
+		if aDemand ~= bDemand then
+			return aDemand > bDemand
+		end
+	end
+
 	local aEff = rowEfficiency(a)
 	local bEff = rowEfficiency(b)
 
