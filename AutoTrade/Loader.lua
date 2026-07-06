@@ -1,5 +1,7 @@
 -- AutoTrade/Loader.lua
 
+local HttpService = game:GetService("HttpService")
+
 local BASE = getgenv().AutoTradeBase or "https://raw.githubusercontent.com/loadstr0/AutoTrade/main/AutoTrade/"
 local BRIDGE_FILE = getgenv().AutoTradeBridgeFile or "autotrade_bridge.json"
 
@@ -27,14 +29,89 @@ local FILES = {
 	"BridgeWatcher",
 }
 
-local HttpService = game:GetService("HttpService")
-
-local function httpGet(url)
-	if game.HttpGet then
-		return game:HttpGet(url)
+local function getRequest()
+	if typeof(request) == "function" then
+		return request
 	end
 
-	return HttpService:GetAsync(url)
+	if typeof(http_request) == "function" then
+		return http_request
+	end
+
+	if syn and typeof(syn.request) == "function" then
+		return syn.request
+	end
+
+	if http and typeof(http.request) == "function" then
+		return http.request
+	end
+
+	return nil
+end
+
+local function addCacheBust(url)
+	local sep = string.find(url, "?", 1, true) and "&" or "?"
+	return url .. sep .. "cache=" .. tostring(os.time()) .. tostring(math.random(1000, 9999))
+end
+
+local function httpGet(url)
+	url = addCacheBust(url)
+
+	print("[AutoTradeLoader] GET:", url)
+
+	local req = getRequest()
+
+	if req then
+		local ok, res = pcall(function()
+			return req({
+				Url = url,
+				Method = "GET",
+				Headers = {
+					["Cache-Control"] = "no-cache",
+					["Pragma"] = "no-cache",
+				},
+			})
+		end)
+
+		if not ok then
+			error("[AutoTradeLoader] request() failed: " .. tostring(res), 2)
+		end
+
+		if type(res) == "table" then
+			local status = tonumber(res.StatusCode or res.Status or 200)
+			local body = res.Body or res.body
+
+			if status and (status < 200 or status >= 300) then
+				error("[AutoTradeLoader] HTTP " .. tostring(status) .. " for " .. url, 2)
+			end
+
+			if type(body) ~= "string" or body == "" then
+				error("[AutoTradeLoader] Empty response for " .. url, 2)
+			end
+
+			return body
+		end
+
+		if type(res) == "string" and res ~= "" then
+			return res
+		end
+
+		error("[AutoTradeLoader] Bad request() response for " .. url .. ": " .. typeof(res), 2)
+	end
+
+	local ok, body = pcall(function()
+		return game:HttpGet(url)
+	end)
+
+	if not ok then
+		error("[AutoTradeLoader] game:HttpGet failed: " .. tostring(body), 2)
+	end
+
+	if type(body) ~= "string" or body == "" then
+		error("[AutoTradeLoader] Empty game:HttpGet response for " .. url, 2)
+	end
+
+	return body
 end
 
 local ctx = {
@@ -83,16 +160,24 @@ local function loadBridgeOnce()
 	end
 
 	print("[AutoTradeLoader] Loaded bridge from workspace:", BRIDGE_FILE)
-	getgenv().AutoTradeBridge = data
 
+	getgenv().AutoTradeBridge = data
 	return data
 end
 
 local function loadRemote(name)
 	local url = BASE .. name .. ".lua"
-	print("[AutoTradeLoader] Loading", name, url)
+
+	print("[AutoTradeLoader] Loading module:", name)
+
+	task.wait(0.15)
 
 	local source = httpGet(url)
+
+	if not string.find(source, "return", 1, true) then
+		warn("[AutoTradeLoader] Source preview for", name, string.sub(source, 1, 200))
+	end
+
 	local chunk, compileErr = loadstring(source)
 
 	if not chunk then
@@ -120,6 +205,7 @@ local function loadRemote(name)
 	end
 
 	print("[AutoTradeLoader] Loaded", name, "as", typeof(result))
+
 	return result
 end
 
@@ -132,6 +218,7 @@ if getgenv().AutoTradeRestockWatch == true and ctx.Modules.RestockWatcher then
 		local ok, err = pcall(function()
 			ctx.Modules.RestockWatcher.Start()
 		end)
+
 		if not ok then
 			warn("[AutoTradeLoader] RestockWatcher crashed:", err)
 		end
@@ -142,6 +229,7 @@ if getgenv().AutoTradeWatch == true then
 	ctx.Modules.BridgeWatcher.Start()
 elseif getgenv().AutoTradeRestockWatch == true then
 	print("[AutoTradeLoader] AutoTradeWatch=false but RestockWatch=true; keeping loader alive for restock requests.")
+
 	while getgenv().AutoTradeStop ~= true do
 		task.wait(1)
 	end
