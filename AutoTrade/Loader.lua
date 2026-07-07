@@ -23,6 +23,7 @@ local FILES = {
 	"TradeState",
 	"TradeActions",
 	"TradeMain",
+	"TokenTradeMain",
 	"Main",
 	"RestockAnalyzer",
 	"RestockWatcher",
