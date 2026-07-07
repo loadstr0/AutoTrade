@@ -185,6 +185,10 @@ return function(ctx)
 			if not bridge.ProductName and not bridge.ProductId then
 				return false, "missing ProductName/ProductId"
 			end
+		elseif bridge.DeliveryMode == "TokenTrade" then
+			if not bridge.TokenAmount or tonumber(bridge.TokenAmount) == nil or tonumber(bridge.TokenAmount) <= 0 then
+				return false, "missing or invalid TokenAmount"
+			end
 		else
 			return false, "bad DeliveryMode: " .. tostring(bridge.DeliveryMode)
 		end
