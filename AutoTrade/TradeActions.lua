@@ -181,6 +181,20 @@ return function(ctx)
 		return false, "send_trade_request_failed"
 	end
 
+	function TradeActions.addTokensToTrade(amount)
+		amount = tonumber(amount)
+	
+		if not amount or amount <= 0 then
+			return false, "invalid_token_amount"
+		end
+	
+		if not Remotes.AddTokensToTrade then
+			return false, "missing_AddTokensToTrade_remote"
+		end
+	
+		return invoke("AddTokensToTrade", Remotes.AddTokensToTrade, amount)
+	end
+
 	function TradeActions.addItemToTrade(item)
 		local uuid = getUuid(item)
 		local itemType = getItemType(item)
