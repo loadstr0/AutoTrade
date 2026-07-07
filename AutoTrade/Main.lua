@@ -110,6 +110,11 @@ return function(ctx)
 				Heartbeat.SetPhase("supply_start", { safeToRetry = true, dangerous = false })
 			end
 			ok, reason = ctx.Modules.SupplyMain.Start(resolved)
+		elseif resolved.DeliveryMode == "TokenTrade" then
+			if Heartbeat and Heartbeat.SetPhase then
+				Heartbeat.SetPhase("token_trade_start", { safeToRetry = true, dangerous = false })
+			end
+			ok, reason = ctx.Modules.TokenTradeMain.Start(resolved)
 		elseif resolved.DeliveryMode == "SupplyThenTrade" then
 			if Heartbeat and Heartbeat.SetPhase then
 				Heartbeat.SetPhase("supply_then_trade_start", { safeToRetry = true, dangerous = false })
