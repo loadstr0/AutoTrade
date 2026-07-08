@@ -1,0 +1,399 @@
+-- AutoTrade/Config.lua
+
+return function(ctx)
+	local Config = {}
+
+	-- Bridge/default payload fields.
+	-- These are usually overwritten by Python JSON.
+	Config.BuyerName = nil
+	Config.BuyerUserId = nil
+
+	Config.ItemName = nil
+	Config.ItemType = nil
+	Config.DeliveryMode = nil
+
+	Config.ProductId = nil
+	Config.ProductName = nil
+
+	Config.Quantity = 1
+	Config.OrderQuantity = 1
+
+	Config.OrderTitle = nil
+	Config.OrderId = nil
+	Config.OrderUrl = nil
+	Config.Price = nil
+
+	Config.ResultFile = nil
+	Config.BridgeId = nil
+	Config.CreatedAt = nil
+	Config.DeadlineUnix = nil
+
+	Config.GroupJobs = nil
+	Config.Grouped = false
+
+	-- Defaults
+	Config.DefaultDeliveryMode = "Trade"
+	Config.DefaultItemType = "Sword"
+
+	-- Queue behavior
+	Config.QueueGroupSameBuyerTrades = true
+	Config.QueueProcessOnlyReadyBuyers = true
+	Config.QueueFailExpiredJobs = true
+
+	-- Heartbeat / crash/data-load recovery
+	Config.HeartbeatFile = "autotrade_heartbeat.json"
+	Config.HeartbeatSeconds = 3
+	Config.MarkDangerousAfterConfirm = true
+	Config.RequireSellerDataReady = true
+
+	-- Trade safety
+	Config.AllowTrade = true
+
+	-- Gift/token safety.
+	-- LIVE TOKEN SPEND IS ENABLED.
+	Config.GiftWithTokens = true
+	Config.GiftDryRun = false
+	Config.AllowTokenSpend = true
+	Config.GiftMessage = ""
+
+	-- Gift success verification.
+	-- Keep this strict: do not assume gift success if token balance cannot be checked.
+	Config.RequireTokenBalanceDecrease = true
+	Config.AssumeGiftSuccessWithoutTokenRead = false
+	Config.ConfirmTokenSpendTimeout = 12
+
+	-- Gift spin-pack planning.
+	-- Blade Ball visible spin gift packs. Hidden/unlisted pack sizes are ignored.
+	Config.GiftAllowedSpinPacks = { 1, 10, 50, 250 }
+	Config.GiftRequireExactPlan = true
+	Config.GiftAllowOverdelivery = false
+	Config.GiftSendDelay = 2.5
+	Config.GiftMaxSendsPerOrder = 50
+
+	-- Auto-supply / Trading Plaza procurement.
+	-- Default is scanner/dry-run mode. Turn SupplyAutoBuy=true and SupplyDryRun=false after testing.
+	Config.SupplyEnabled = true
+	Config.SupplyAutoBuy = false
+	Config.SupplyDryRun = true
+	Config.SupplyThenTrade = true
+	Config.SupplyStateFile = "autosupply_state.json"
+	Config.SupplyPostTeleportWait = 6
+	Config.SupplyRetryDelay = 1
+	Config.SupplyMaxServersPerItem = 15
+	Config.SupplyUseRecentSales = true
+	Config.SupplyRAPDaysBack = 5
+	Config.SupplyRequireTokenBalanceRead = true
+	Config.SupplyRequireTokenDecrease = true
+	Config.SupplyConfirmTokenDecreaseTimeout = 12
+	Config.SupplyInventoryVerifyTimeout = 20
+	Config.SupplyMaxTokensPerOrder = 75000
+	Config.SupplyMaxTokensPerItem = 0
+	Config.SupplyTokenReservePercent = 15
+	Config.SupplyMaxTokensPerHour = 100000
+	Config.SupplyNoSalesMultiplier = 0.95
+	Config.SupplyLowSalesMultiplier = 0.90
+	Config.SupplyMidSalesMultiplier = 0.95
+	Config.SupplyPriceRules = {
+		{ MaxRap = 500, MaxMultiplier = 1.40, MaxExtra = 150 },
+		{ MaxRap = 2000, MaxMultiplier = 1.25, MaxExtra = 300 },
+		{ MaxRap = 5000, MaxMultiplier = 1.15, MaxExtra = 500 },
+		{ MaxRap = math.huge, MaxMultiplier = 1.10, MaxExtra = 800 },
+	}
+
+	-- Auto-supply max-safety switches. These default to strict/manual when ambiguous.
+	Config.SupplyRequireTradingPlazaServer = true
+	Config.SupplyRequireTradingFlags = true
+	Config.SupplyRequireBoothItemKey = true
+	Config.SupplyDoubleCheckListing = true
+	Config.SupplyDoubleCheckDelay = 0.75
+	Config.SupplyRequireRecentSalesForAutoBuy = true
+	Config.SupplyBlockNoSales = true
+	Config.SupplyMinSalesPerDayAutoBuy = 1
+	Config.SupplyRAPMaxRetries = 4
+	Config.SupplyRAPRetryDelay = 1.25
+	Config.SupplyMinTokenReserve = 0
+	Config.SupplyRequireExactTokenDecrease = false
+	Config.SupplyDangerousStateBlocksNewOrders = true
+	Config.SupplyVisitedTtlSeconds = 3600
+	Config.SupplyClearVisitedWhenExhausted = false
+	Config.SupplySpendLedgerFile = "autosupply_spend_ledger.json"
+	Config.SupplySpendLedgerTtlSeconds = 86400
+	Config.SupplyMaxQuantityPerOrder = 3
+	Config.SupplyAllowMultiplePurchasesPerOrder = true
+	Config.SupplyTeleportConfirmWait = 8
+	Config.SupplyReturnTeleportWait = 8
+	Config.SupplyAllowCurrentServerReturn = false
+	Config.SupplyIndexPreviewWait = 1.5
+	Config.SupplyIndexPromptWait = 12
+	Config.SupplyMaxSearchAttempts = 15
+	Config.SupplyNoDirectListingRemotes = true
+	Config.SupplyPreferIndexUIPath = true
+
+	-- General behavior
+	Config.TickDelay = 0.25
+	Config.RetryDelay = 1
+	Config.BuyerWaitTimeout = math.huge
+	Config.PrintDebug = true
+
+	-- Lua buyer waiting / queue behavior
+	Config.TradeBuyerJoinTimeout = 19 * 60
+	Config.TradeBuyerJoinPollSeconds = 2
+
+	-- Trade timing / safety
+	Config.TradeJoinCooldown = 30
+	Config.TradeRequestRetries = 5
+	Config.TradeRequestRetryDelay = 3
+
+	Config.TradeOpenTimeout = 15
+	Config.TradeItemVerifyTimeout = 8
+	Config.TradeCountdownTimeout = 12
+	Config.TradeWaitBetweenItemAdds = true
+	Config.TradeAddRetryDelay = 0.75
+
+	Config.TradeLocalReadyTimeout = 8
+	Config.TradeBuyerReadyTimeout = 60
+
+	Config.TradeConfirmRetryTimeout = 15
+	Config.TradeLocalConfirmTimeout = 8
+	Config.TradeBuyerConfirmTimeout = 60
+	Config.TradeFinalTimeout = 30
+
+	Config.TradeClearBeforeAdd = true
+	Config.TradeAutoConfirm = true
+	Config.RequireManualConfirm = false
+
+	-- Multi-item / multi-order support.
+	Config.AllowMultiQuantityTrade = true
+	Config.AllowSameBuyerTradeBatching = true
+	Config.MaxTradeItemsPerBatch = 100
+
+	-- Completed popup
+	Config.CloseCompletedPopup = true
+	Config.CompletedPopupTimeout = 8
+
+	-- Old fallback values. Safe to keep for older modules.
+	Config.TimeoutTradeAccept = 15
+	Config.TimeoutFinalComplete = 45
+	Config.MaxAddAttempts = 10
+	Config.MaxReadyAttempts = 10
+	Config.MaxConfirmAttempts = 20
+
+	-- Gift timing
+	Config.MaxGiftAttempts = 1
+	Config.GiftRetryDelay = 2.5
+
+	local function shallowCopyWithoutFunctions(source)
+		local copy = {}
+
+		for k, v in pairs(source) do
+			if type(v) ~= "function" then
+				copy[k] = v
+			end
+		end
+
+		return copy
+	end
+
+	local function applyBridge(resolved, bridge)
+		if type(bridge) ~= "table" then
+			return resolved
+		end
+
+		for k, v in pairs(bridge) do
+			if v ~= nil then
+				resolved[k] = v
+			end
+		end
+
+		return resolved
+	end
+
+	local function getGlobalBridge()
+		if type(getgenv) ~= "function" then
+			return nil
+		end
+
+		local ok, env = pcall(getgenv)
+
+		if not ok or type(env) ~= "table" then
+			return nil
+		end
+
+		return env.AutoTradeBridge
+	end
+
+	local function normalizeBoolean(value, default)
+		if value == nil then
+			return default
+		end
+
+		if value == true or value == false then
+			return value
+		end
+
+		if type(value) == "string" then
+			local lowered = string.lower(value)
+
+			if lowered == "true" or lowered == "1" or lowered == "yes" then
+				return true
+			end
+
+			if lowered == "false" or lowered == "0" or lowered == "no" then
+				return false
+			end
+		end
+
+		return default
+	end
+
+	local function normalize(resolved)
+		if not resolved.DeliveryMode or resolved.DeliveryMode == "" then
+			resolved.DeliveryMode = resolved.DefaultDeliveryMode or "Trade"
+		end
+
+		if resolved.DeliveryMode == "Trade" then
+			if not resolved.ItemType or resolved.ItemType == "" then
+				resolved.ItemType = resolved.DefaultItemType or "Sword"
+			end
+		end
+
+		resolved.Quantity = tonumber(resolved.Quantity or 1) or 1
+		resolved.OrderQuantity = tonumber(resolved.OrderQuantity or 1) or 1
+
+		if resolved.BuyerUserId ~= nil and resolved.BuyerUserId ~= "" then
+			resolved.BuyerUserId = tonumber(resolved.BuyerUserId)
+		else
+			resolved.BuyerUserId = nil
+		end
+
+		if resolved.DeadlineUnix ~= nil and resolved.DeadlineUnix ~= "" then
+			resolved.DeadlineUnix = tonumber(resolved.DeadlineUnix)
+		else
+			resolved.DeadlineUnix = nil
+		end
+
+		resolved.GiftWithTokens = normalizeBoolean(resolved.GiftWithTokens, true)
+		resolved.GiftDryRun = normalizeBoolean(resolved.GiftDryRun, false)
+		resolved.AllowTokenSpend = normalizeBoolean(resolved.AllowTokenSpend, true)
+		resolved.RequireTokenBalanceDecrease = normalizeBoolean(resolved.RequireTokenBalanceDecrease, true)
+		resolved.AssumeGiftSuccessWithoutTokenRead = normalizeBoolean(resolved.AssumeGiftSuccessWithoutTokenRead, false)
+		resolved.GiftRequireExactPlan = normalizeBoolean(resolved.GiftRequireExactPlan, true)
+		resolved.GiftAllowOverdelivery = normalizeBoolean(resolved.GiftAllowOverdelivery, false)
+
+		resolved.SupplyEnabled = normalizeBoolean(resolved.SupplyEnabled, true)
+		resolved.SupplyAutoBuy = normalizeBoolean(resolved.SupplyAutoBuy, false)
+		resolved.SupplyDryRun = normalizeBoolean(resolved.SupplyDryRun, true)
+		resolved.SupplyThenTrade = normalizeBoolean(resolved.SupplyThenTrade, true)
+		resolved.SupplyRequireTokenBalanceRead = normalizeBoolean(resolved.SupplyRequireTokenBalanceRead, true)
+		resolved.SupplyRequireTokenDecrease = normalizeBoolean(resolved.SupplyRequireTokenDecrease, true)
+		resolved.SupplyRequireTradingPlazaServer = normalizeBoolean(resolved.SupplyRequireTradingPlazaServer, true)
+		resolved.SupplyRequireTradingFlags = normalizeBoolean(resolved.SupplyRequireTradingFlags, true)
+		resolved.SupplyRequireBoothItemKey = normalizeBoolean(resolved.SupplyRequireBoothItemKey, true)
+		resolved.SupplyDoubleCheckListing = normalizeBoolean(resolved.SupplyDoubleCheckListing, true)
+		resolved.SupplyRequireRecentSalesForAutoBuy = normalizeBoolean(resolved.SupplyRequireRecentSalesForAutoBuy, true)
+		resolved.SupplyBlockNoSales = normalizeBoolean(resolved.SupplyBlockNoSales, true)
+		resolved.SupplyRequireExactTokenDecrease = normalizeBoolean(resolved.SupplyRequireExactTokenDecrease, false)
+		resolved.SupplyDangerousStateBlocksNewOrders = normalizeBoolean(resolved.SupplyDangerousStateBlocksNewOrders, true)
+		resolved.SupplyClearVisitedWhenExhausted = normalizeBoolean(resolved.SupplyClearVisitedWhenExhausted, false)
+		resolved.SupplyAllowMultiplePurchasesPerOrder = normalizeBoolean(resolved.SupplyAllowMultiplePurchasesPerOrder, true)
+		resolved.SupplyAllowCurrentServerReturn = normalizeBoolean(resolved.SupplyAllowCurrentServerReturn, false)
+
+		resolved.TradeAutoConfirm = normalizeBoolean(resolved.TradeAutoConfirm, true)
+		resolved.RequireManualConfirm = normalizeBoolean(resolved.RequireManualConfirm, false)
+
+		resolved.AllowMultiQuantityTrade = normalizeBoolean(resolved.AllowMultiQuantityTrade, true)
+		resolved.AllowSameBuyerTradeBatching = normalizeBoolean(resolved.AllowSameBuyerTradeBatching, true)
+
+		return resolved
+	end
+
+	function Config.Resolve(overrideCtx)
+		local useCtx = overrideCtx or ctx or {}
+		local resolved = shallowCopyWithoutFunctions(Config)
+
+		-- Apply global bridge first, then current ctx bridge over it.
+		-- This avoids stale global data overriding the job BridgeWatcher is currently processing.
+		applyBridge(resolved, getGlobalBridge())
+
+		if type(useCtx) == "table" then
+			applyBridge(resolved, useCtx.Bridge)
+			applyBridge(resolved, useCtx.Payload)
+			applyBridge(resolved, useCtx.Job)
+		end
+
+		return normalize(resolved)
+	end
+
+	function Config.Get(overrideCtx)
+		return Config.Resolve(overrideCtx)
+	end
+
+	function Config.PrintResolved(overrideCtx, Logger)
+		local resolved = Config.Resolve(overrideCtx)
+		Logger = Logger or (overrideCtx and overrideCtx.Modules and overrideCtx.Modules.Logger)
+
+		if Logger and Logger.info then
+			Logger.info("Resolved Config:")
+
+			local keys = {
+				"BuyerName",
+				"BuyerUserId",
+				"DeliveryMode",
+				"ItemType",
+				"ItemName",
+				"ProductName",
+				"ProductId",
+				"Quantity",
+				"OrderQuantity",
+				"BridgeId",
+				"DeadlineUnix",
+				"ResultFile",
+				"Grouped",
+				"GroupJobs",
+				"TradeAutoConfirm",
+				"RequireManualConfirm",
+				"AllowMultiQuantityTrade",
+				"AllowSameBuyerTradeBatching",
+				"GiftWithTokens",
+				"GiftDryRun",
+				"AllowTokenSpend",
+				"RequireTokenBalanceDecrease",
+				"AssumeGiftSuccessWithoutTokenRead",
+				"GiftRequireExactPlan",
+				"GiftAllowOverdelivery",
+				"GiftSendDelay",
+				"GiftMaxSendsPerOrder",
+				"SupplyEnabled",
+				"SupplyAutoBuy",
+				"SupplyDryRun",
+				"SupplyThenTrade",
+				"SupplyMaxTokensPerOrder",
+				"SupplyMaxServersPerItem",
+				"SupplyRequireTradingPlazaServer",
+				"SupplyRequireTradingFlags",
+				"SupplyRequireBoothItemKey",
+				"SupplyDoubleCheckListing",
+				"SupplyRequireRecentSalesForAutoBuy",
+				"SupplyBlockNoSales",
+				"SupplyMinSalesPerDayAutoBuy",
+				"SupplyMaxTokensPerHour",
+				"SupplyTokenReservePercent",
+				"SupplyMaxQuantityPerOrder",
+			}
+
+			for _, key in ipairs(keys) do
+				local value = resolved[key]
+
+				if key == "GroupJobs" and type(value) == "table" then
+					Logger.info(" ", key, "=", tostring(#value), "jobs")
+				else
+					Logger.info(" ", key, "=", tostring(value))
+				end
+			end
+		end
+
+		return resolved
+	end
+
+	return Config
+end
