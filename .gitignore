@@ -1,0 +1,13 @@
+# Ignore everything by default
+*
+
+# But allow folders to be scanned
+!*/
+
+# Keep only Markdown and Lua/Luau source files tracked
+!*.md
+!*.lua
+!*.luau
+
+# Keep this file tracked too
+!.gitignore
