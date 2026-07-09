@@ -168,6 +168,7 @@ return function(ctx)
 		local retryableExact = {
 			buyer_join_timeout = true,
 			buyer_not_found = true,
+			incoming_trade_request_timeout = true,
 			trade_open_timeout = true,
 			trade_closed = true,
 			buyer_ready_timeout = true,
@@ -478,11 +479,42 @@ return function(ctx)
 			Logger.warn("Could not read token balance before trade (Replion Inventory:Get('Tokens') failed).")
 		end
 
-		phase("trade_requesting", { BuyerName = buyer.Name, BuyerUserId = buyer.UserId, safeToRetry = true, dangerous = false })
+		local direction = tostring(config.TradeDirection or "outgoing"):lower()
 
-		local requestOk, requestResult = TradeActions.sendTradeRequest(buyer)
-		if not requestOk then
-			return false, "trade_request_failed:" .. tostring(requestResult)
+		if direction == "incoming" then
+			-- Buyer sends the trade request to us instead. Mirrors the
+			-- outgoing dry-run gate below: default true/safe, must be
+			-- explicitly disabled (via the Python side's config) before a
+			-- real incoming request gets accepted.
+			if cfgBool(config, "IncomingTradeDryRun", true) then
+				Logger.warn("IncomingTradeDryRun is true -- not accepting a real incoming trade request. No tokens will move.")
+				return false, "incoming_trade_dry_run_blocked"
+			end
+
+			phase("waiting_incoming_trade_request", { BuyerName = buyer.Name, BuyerUserId = buyer.UserId, safeToRetry = true, dangerous = false })
+
+			local incomingTimeout = cfgNumber(config, "TradeIncomingRequestTimeout", 120)
+			local seenOk, seenReason = TradeState.waitForIncomingTradeRequest(buyer, incomingTimeout)
+
+			if not seenOk then
+				return false, seenReason
+			end
+
+			phase("trade_requesting", { BuyerName = buyer.Name, BuyerUserId = buyer.UserId, safeToRetry = true, dangerous = false })
+
+			local acceptOk, acceptResult = TradeActions.acceptTradeRequest(buyer)
+			TradeState.clearIncomingRequest(buyer.UserId)
+
+			if not acceptOk then
+				return false, "trade_request_failed:" .. tostring(acceptResult)
+			end
+		else
+			phase("trade_requesting", { BuyerName = buyer.Name, BuyerUserId = buyer.UserId, safeToRetry = true, dangerous = false })
+
+			local requestOk, requestResult = TradeActions.sendTradeRequest(buyer)
+			if not requestOk then
+				return false, "trade_request_failed:" .. tostring(requestResult)
+			end
 		end
 
 		phase("waiting_trade_open", { safeToRetry = true, dangerous = false })

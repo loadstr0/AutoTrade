@@ -49,6 +49,18 @@ return function(ctx)
 	-- Trade safety
 	Config.AllowTrade = true
 
+	-- Trade direction: "outgoing" (default, unchanged) = we send the trade
+	-- request to the buyer, same as always. "incoming" = the buyer sends
+	-- the request to us instead and we wait for + accept it (the corrected
+	-- flow based on a real observed order where the seller-friends-buyer
+	-- workaround was needed). IncomingTradeDryRun mirrors the existing
+	-- TokenTradeDryRun/GiftDryRun pattern -- default true/safe, must be
+	-- explicitly turned off (via the Python side's config) to actually
+	-- accept a real incoming trade request.
+	Config.TradeDirection = "outgoing"
+	Config.IncomingTradeDryRun = true
+	Config.TradeIncomingRequestTimeout = 120
+
 	-- Gift/token safety.
 	-- LIVE TOKEN SPEND IS ENABLED.
 	Config.GiftWithTokens = true
@@ -300,6 +312,11 @@ return function(ctx)
 
 		resolved.TradeAutoConfirm = normalizeBoolean(resolved.TradeAutoConfirm, true)
 		resolved.RequireManualConfirm = normalizeBoolean(resolved.RequireManualConfirm, false)
+		resolved.IncomingTradeDryRun = normalizeBoolean(resolved.IncomingTradeDryRun, true)
+
+		if type(resolved.TradeDirection) ~= "string" or resolved.TradeDirection == "" then
+			resolved.TradeDirection = "outgoing"
+		end
 
 		resolved.AllowMultiQuantityTrade = normalizeBoolean(resolved.AllowMultiQuantityTrade, true)
 		resolved.AllowSameBuyerTradeBatching = normalizeBoolean(resolved.AllowSameBuyerTradeBatching, true)

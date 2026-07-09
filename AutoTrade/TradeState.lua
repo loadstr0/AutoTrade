@@ -140,6 +140,54 @@ return function(ctx)
 		end)
 	end
 
+	-- Buyer-initiates-trade support ("TradeDirection" = "incoming"): Blade
+	-- Ball fires ReceivedTradeRequest to the client when someone sends US a
+	-- trade request -- the mirror image of our own SendTradeRequest flow.
+	-- Confirmed from a real dump of ReplicatedStorage.Shared.Trading.TradeInfo
+	-- and TradeRequestController:
+	--   Remotes.ReceivedTradeRequest  -- RemoteEvent, fires with { From = Player, Time = number }
+	--   Remotes.RespondToTradeRequest -- RemoteFunction, InvokeServer(fromPlayer, true/false)
+	-- TradeInfo.TradeRequestExpiration is only 10 seconds, so this hook is
+	-- installed once at bot startup (TradeState.lua only ever runs its module
+	-- body once, per Loader.lua) rather than per-job -- otherwise a buyer who
+	-- sends a request right as they join could expire before any bridge job
+	-- even starts watching for them.
+	getgenv().AutoTradeIncomingRequests = getgenv().AutoTradeIncomingRequests or {}
+	local incomingRequests = getgenv().AutoTradeIncomingRequests
+
+	if TradeInfo.Remotes.ReceivedTradeRequest and not getgenv().AutoTradeReceivedRequestHooked then
+		getgenv().AutoTradeReceivedRequestHooked = true
+
+		TradeInfo.Remotes.ReceivedTradeRequest.OnClientEvent:Connect(function(payload)
+			local ok, err = pcall(function()
+				local from = payload and payload.From
+
+				if not from then
+					return
+				end
+
+				local fromUserId = (typeof(from) == "Instance" and from.UserId)
+					or (type(from) == "table" and from.UserId)
+
+				if not fromUserId then
+					return
+				end
+
+				incomingRequests[tostring(fromUserId)] = {
+					player = from,
+					time = tonumber(payload.Time) or workspace:GetServerTimeNow(),
+				}
+
+				local fromName = (typeof(from) == "Instance" and from.Name) or tostring(from)
+				Logger.info("Incoming trade request captured from:", fromName, fromUserId)
+			end)
+
+			if not ok then
+				Logger.warn("ReceivedTradeRequest handler error:", err)
+			end
+		end)
+	end
+
 	local function getPlayers(trade)
 		local players = safeGet(trade, "Players")
 
@@ -318,6 +366,73 @@ return function(ctx)
 		end
 
 		return false, "trade_open_timeout"
+	end
+
+	function TradeState.getIncomingRequest(buyerUserId)
+		buyerUserId = tonumber(buyerUserId)
+
+		if not buyerUserId then
+			return nil
+		end
+
+		local entry = incomingRequests[tostring(buyerUserId)]
+
+		if not entry then
+			return nil
+		end
+
+		-- TradeInfo.TradeRequestExpiration is the server's own expiration
+		-- window (10s) -- treat a stale captured entry as gone so we don't
+		-- try to accept a request the server has already expired.
+		local age = workspace:GetServerTimeNow() - entry.time
+
+		if age > TradeInfo.TradeRequestExpiration then
+			incomingRequests[tostring(buyerUserId)] = nil
+			return nil
+		end
+
+		return entry
+	end
+
+	function TradeState.clearIncomingRequest(buyerUserId)
+		buyerUserId = tonumber(buyerUserId)
+
+		if buyerUserId then
+			incomingRequests[tostring(buyerUserId)] = nil
+		end
+	end
+
+	function TradeState.waitForIncomingTradeRequest(buyer, timeout)
+		timeout = tonumber(timeout or 60) or 60
+
+		local buyerUserId = userIdOf(buyer)
+
+		if not buyerUserId then
+			return false, "missing_buyer_user_id"
+		end
+
+		Logger.info("Waiting for buyer to send us a trade request. Timeout:", timeout)
+
+		local start = os.clock()
+		local lastLog = 0
+
+		while os.clock() - start < timeout do
+			local entry = TradeState.getIncomingRequest(buyerUserId)
+
+			if entry then
+				Logger.info("Incoming trade request confirmed from buyer.")
+				return true, "incoming_request_seen", entry.player
+			end
+
+			if os.clock() - lastLog >= 5 then
+				Logger.info("Still waiting for buyer's incoming trade request...")
+				lastLog = os.clock()
+			end
+
+			task.wait(0.25)
+		end
+
+		return false, "incoming_trade_request_timeout"
 	end
 
 	function TradeState.getPlayerValue(userId, key)

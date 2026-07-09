@@ -181,6 +181,39 @@ return function(ctx)
 		return false, "send_trade_request_failed"
 	end
 
+	-- Buyer-initiates-trade support ("TradeDirection" = "incoming"). Real
+	-- remote + call signature confirmed from a live dump of
+	-- TradeRequestController.lua's own "Yes" button handler:
+	--   TradeInfo.Remotes.RespondToTradeRequest:InvokeServer(fromPlayer, true)
+	-- fromPlayer is the actual Player instance that sent the request (the
+	-- same one captured off the ReceivedTradeRequest event in TradeState.lua),
+	-- not a UserId/username -- unlike SendTradeRequest, which tries multiple
+	-- shapes because we didn't have this confirmed, this one is verified so
+	-- there's no need to guess argument shapes here.
+	function TradeActions.respondToTradeRequest(buyer, accept)
+		if not buyer then
+			return false, "missing_buyer"
+		end
+
+		if not Remotes.RespondToTradeRequest then
+			return false, "missing_RespondToTradeRequest_remote"
+		end
+
+		if accept == nil then
+			accept = true
+		end
+
+		return invoke("RespondToTradeRequest", Remotes.RespondToTradeRequest, buyer, accept)
+	end
+
+	function TradeActions.acceptTradeRequest(buyer)
+		return TradeActions.respondToTradeRequest(buyer, true)
+	end
+
+	function TradeActions.declineTradeRequest(buyer)
+		return TradeActions.respondToTradeRequest(buyer, false)
+	end
+
 	function TradeActions.addTokensToTrade(amount)
 		amount = tonumber(amount)
 	
