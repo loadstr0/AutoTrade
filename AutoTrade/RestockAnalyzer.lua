@@ -58,6 +58,14 @@ local CONFIG = {
 	MaxOfferRows = 200,
 	MaxResolverSuggestions = 8,
 
+	-- Every log("INFO", ...) call still gets written in full to
+	-- autotrade_restock_debug_log.txt regardless of this setting -- nothing
+	-- is lost. This only controls whether that same per-item chatter
+	-- (resolve attempts, RAP checks, per-row allocation decisions) also
+	-- prints live to the console. Leave false for normal runs; flip to
+	-- true only when actively debugging a specific run.
+	VerboseConsole = false,
+
 	SpinPacks = {
 		{ spins = 250, tokens = 10785 },
 		{ spins = 50, tokens = 2400 },
@@ -113,7 +121,7 @@ local function log(level, ...)
 	elseif level == "ERROR" then
 		ERROR_COUNT += 1
 		warn("[RESTOCK_AUTO_ERROR]", table.concat(parts, " "))
-	else
+	elseif CONFIG.VerboseConsole then
 		print("[RESTOCK_AUTO]", table.concat(parts, " "))
 	end
 end
@@ -1558,69 +1566,30 @@ local function main()
 		end
 	end
 
-	print("========== PAUSED / DISABLED ==========")
+	-- Grouped by reason instead of one line per item -- with ~20-50+ offers
+	-- typically paused per run, printing every single one live drowns out
+	-- everything else. Full per-item detail (name/title/reason/action) is
+	-- still in CONFIG.OutputFile and the debug log either way; set
+	-- VerboseConsole = true above if you need the per-item list live too.
+	local pauseReasonCounts = {}
+	local pauseTotal = 0
+
 	for _, row in ipairs(rows) do
 		if not row.recommendedEnabled then
-			print(("[PAUSE] %s | %s | %s | title=%s | reason=%s | action=%s"):format(
-				tostring(row.kind),
-				tostring(row.itemType or "-"),
-				tostring(row.gameItemName or row.name),
-				tostring(row.title or row.name),
-				tostring(row.disableReason),
-				tostring(row.pythonAction)
-			))
+			pauseTotal += 1
+			local reason = tostring(row.disableReason)
+			pauseReasonCounts[reason] = (pauseReasonCounts[reason] or 0) + 1
 		end
 	end
 
-	print("=======================================")
+	local pauseReasonList = {}
 
-	saveLog()
-	log("INFO", "script done")
-	saveLog()
-end
+	for reason, count in pairs(pauseReasonCounts) do
+		table.insert(pauseReasonList, { reason = reason, count = count })
+	end
 
-
-local function resetRunState()
-	LOG_LINES = {}
-	WARN_COUNT = 0
-	ERROR_COUNT = 0
-	rapCache = {}
-	rapChecksDone = 0
-end
-
-function RestockAnalyzer.Run(overrides)
-	resetRunState()
-
-	if type(overrides) == "table" then
-		for k, v in pairs(overrides) do
-			if CONFIG[k] ~= nil or k == "InputFile" or k == "OutputFile" or k == "LogFile" then
-				CONFIG[k] = v
-			end
+	table.sort(pauseReasonList, function(a, b)
+		if a.count == b.count then
+			return a.reason < b.reason
 		end
-	end
-
-	local ok, err = xpcall(main, function(e)
-		return tostring(e) .. "\n" .. debug.traceback()
-	end)
-
-	if not ok then
-		log("ERROR", "fatal error:", err)
-		writeJson(CONFIG.OutputFile, {
-			ok = false,
-			fatalError = err,
-			config = CONFIG,
-			logFile = CONFIG.LogFile,
-		})
-		saveLog()
-		return false, tostring(err)
-	end
-
-	return true, "ok"
-end
-
-function RestockAnalyzer.GetConfig()
-	return CONFIG
-end
-
-return RestockAnalyzer
-end
+		return a.count > b.co

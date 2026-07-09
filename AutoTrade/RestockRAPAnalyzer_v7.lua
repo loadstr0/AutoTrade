@@ -59,6 +59,14 @@ local CONFIG = {
 	MaxOfferRows = 200,
 	MaxResolverSuggestions = 8,
 
+	-- Every log("INFO", ...) call still gets written in full to
+	-- autotrade_restock_debug_log.txt regardless of this setting -- nothing
+	-- is lost. This only controls whether that same per-item chatter
+	-- (resolve attempts, RAP checks, per-row allocation decisions) also
+	-- prints live to the console. Leave false for normal runs; flip to
+	-- true only when actively debugging a specific run.
+	VerboseConsole = false,
+
 	SpinPacks = {
 		{ spins = 250, tokens = 10785 },
 		{ spins = 50, tokens = 2400 },
@@ -114,7 +122,7 @@ local function log(level, ...)
 	elseif level == "ERROR" then
 		ERROR_COUNT += 1
 		warn("[RESTOCK_V7_ERROR]", table.concat(parts, " "))
-	else
+	elseif CONFIG.VerboseConsole then
 		print("[RESTOCK_V7]", table.concat(parts, " "))
 	end
 end
@@ -1598,38 +1606,9 @@ local function main()
 		end
 	end
 
-	print("========== PAUSED / DISABLED ==========")
-	for _, row in ipairs(rows) do
-		if not row.recommendedEnabled then
-			print(("[PAUSE] %s | %s | %s | title=%s | reason=%s | action=%s"):format(
-				tostring(row.kind),
-				tostring(row.itemType or "-"),
-				tostring(row.gameItemName or row.name),
-				tostring(row.title or row.name),
-				tostring(row.disableReason),
-				tostring(row.pythonAction)
-			))
-		end
-	end
-
-	print("=======================================")
-
-	saveLog()
-	log("INFO", "script done")
-	saveLog()
-end
-
-local ok, err = xpcall(main, function(e)
-	return tostring(e) .. "\n" .. debug.traceback()
-end)
-
-if not ok then
-	log("ERROR", "fatal error:", err)
-	writeJson(CONFIG.OutputFile, {
-		ok = false,
-		fatalError = err,
-		config = CONFIG,
-		logFile = CONFIG.LogFile,
-	})
-	saveLog()
-end
+	-- Grouped by reason instead of one line per item -- with ~20-50+ offers
+	-- typically paused per run, printing every single one live drowns out
+	-- everything else. Full per-item detail (name/title/reason/action) is
+	-- still in CONFIG.OutputFile and the debug log either way; set
+	-- VerboseConsole = true above if you need the per-item list live too.
+	local pauseReaso
