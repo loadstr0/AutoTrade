@@ -20,6 +20,7 @@ local FILES = {
 	"SupplyMain",
 	"GiftActions",
 	"GiftMain",
+	"ChatActions",
 	"TradeState",
 	"TradeActions",
 	"TradeMain",
@@ -123,6 +124,7 @@ local ctx = {
 		Players = game:GetService("Players"),
 		ReplicatedStorage = game:GetService("ReplicatedStorage"),
 		HttpService = HttpService,
+		TextChatService = game:GetService("TextChatService"),
 	},
 }
 

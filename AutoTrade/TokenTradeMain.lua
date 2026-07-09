@@ -621,6 +621,25 @@ return function(ctx)
 			return false, "missing_or_invalid_token_amount"
 		end
 
+		-- Python decides when this should be populated (e.g. the trade-
+		-- privacy retry path switching direction to "incoming"), and
+		-- builds the actual wording -- Lua's only job is to actually send
+		-- it, once, via the general chat channel confirmed working in
+		-- Tests/InGameChatTest.lua. Sent here (once per Start() call,
+		-- i.e. once per delivery attempt from Python's side) rather than
+		-- inside the lower-level retry loop, so an internal trade-open
+		-- retry doesn't spam the same message into a public channel.
+		if config.InGameChatMessage and tostring(config.InGameChatMessage) ~= "" then
+			local ChatActions = ctx.Modules.ChatActions
+
+			if ChatActions and ChatActions.sendMessageToBuyer then
+				local sentOk, sentReason = ChatActions.sendMessageToBuyer(config.BuyerName, config.InGameChatMessage)
+				Logger.info("In-game chat message send attempt:", sentOk, sentReason)
+			else
+				Logger.warn("InGameChatMessage set but ChatActions module unavailable.")
+			end
+		end
+
 		local buyer, buyerReason = waitForBuyer(config)
 		if not buyer then
 			return false, buyerReason
