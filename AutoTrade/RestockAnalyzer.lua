@@ -31,7 +31,14 @@ local CONFIG = {
 
 	CurrentTokens = 23916,
 	TokenRatePerKUsd = 3.78672,
-	SellerFeePercent = 5,
+	-- These rows are spin/sword/emote/explosion offers (Items category),
+	-- NOT the raw Currency "Trade Tokens" offer. Confirmed 15% two ways:
+	-- a real Eldorado payout receipt ($1.12 commission on a $7.47 order),
+	-- and Eldorado's own published fee table (Blade Ball Items -> 15%).
+	-- Was wrongly set to 5% (the Currency-category base rate, which does
+	-- not apply here) -- every profit/margin/breakeven number this file
+	-- computes was understating the real fee until this was fixed.
+	SellerFeePercent = 15,
 
 	TokenReserve = 1000,
 
