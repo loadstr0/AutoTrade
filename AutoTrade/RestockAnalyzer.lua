@@ -1592,4 +1592,62 @@ local function main()
 		if a.count == b.count then
 			return a.reason < b.reason
 		end
-		return a.count > b.co
+		return a.count > b.count
+	end)
+
+	print(("========== PAUSED / DISABLED (%d) =========="):format(pauseTotal))
+	for _, entry in ipairs(pauseReasonList) do
+		print(("[PAUSE] %s x%d"):format(entry.reason, entry.count))
+	end
+	print("=======================================")
+
+	saveLog()
+	log("INFO", "script done")
+	saveLog()
+end
+
+
+local function resetRunState()
+	LOG_LINES = {}
+	WARN_COUNT = 0
+	ERROR_COUNT = 0
+	rapCache = {}
+	rapChecksDone = 0
+end
+
+function RestockAnalyzer.Run(overrides)
+	resetRunState()
+
+	if type(overrides) == "table" then
+		for k, v in pairs(overrides) do
+			if CONFIG[k] ~= nil or k == "InputFile" or k == "OutputFile" or k == "LogFile" then
+				CONFIG[k] = v
+			end
+		end
+	end
+
+	local ok, err = xpcall(main, function(e)
+		return tostring(e) .. "\n" .. debug.traceback()
+	end)
+
+	if not ok then
+		log("ERROR", "fatal error:", err)
+		writeJson(CONFIG.OutputFile, {
+			ok = false,
+			fatalError = err,
+			config = CONFIG,
+			logFile = CONFIG.LogFile,
+		})
+		saveLog()
+		return false, tostring(err)
+	end
+
+	return true, "ok"
+end
+
+function RestockAnalyzer.GetConfig()
+	return CONFIG
+end
+
+return RestockAnalyzer
+end

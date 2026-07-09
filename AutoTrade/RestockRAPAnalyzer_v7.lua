@@ -1611,4 +1611,52 @@ local function main()
 	-- everything else. Full per-item detail (name/title/reason/action) is
 	-- still in CONFIG.OutputFile and the debug log either way; set
 	-- VerboseConsole = true above if you need the per-item list live too.
-	local pauseReaso
+	local pauseReasonCounts = {}
+	local pauseTotal = 0
+
+	for _, row in ipairs(rows) do
+		if not row.recommendedEnabled then
+			pauseTotal += 1
+			local reason = tostring(row.disableReason)
+			pauseReasonCounts[reason] = (pauseReasonCounts[reason] or 0) + 1
+		end
+	end
+
+	local pauseReasonList = {}
+
+	for reason, count in pairs(pauseReasonCounts) do
+		table.insert(pauseReasonList, { reason = reason, count = count })
+	end
+
+	table.sort(pauseReasonList, function(a, b)
+		if a.count == b.count then
+			return a.reason < b.reason
+		end
+		return a.count > b.count
+	end)
+
+	print(("========== PAUSED / DISABLED (%d) =========="):format(pauseTotal))
+	for _, entry in ipairs(pauseReasonList) do
+		print(("[PAUSE] %s x%d"):format(entry.reason, entry.count))
+	end
+	print("=======================================")
+
+	saveLog()
+	log("INFO", "script done")
+	saveLog()
+end
+
+local ok, err = xpcall(main, function(e)
+	return tostring(e) .. "\n" .. debug.traceback()
+end)
+
+if not ok then
+	log("ERROR", "fatal error:", err)
+	writeJson(CONFIG.OutputFile, {
+		ok = false,
+		fatalError = err,
+		config = CONFIG,
+		logFile = CONFIG.LogFile,
+	})
+	saveLog()
+end
