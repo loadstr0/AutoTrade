@@ -434,7 +434,18 @@ return function(ctx)
 
 		task.spawn(function()
 			while getgenv().AutoTradeStop ~= true do
-				Heartbeat.Write()
+				-- A single bad Write() (e.g. a transient nil somewhere not
+				-- already caught inside it) must never kill this whole loop
+				-- permanently -- that would freeze the heartbeat forever even
+				-- though the bot is still fully alive in-game, which is
+				-- exactly the "stale heartbeat but actually fine" case the
+				-- Python-side presence check exists to catch. Guard every
+				-- tick so one bad write just gets logged and retried next
+				-- cycle instead of ending the loop.
+				local ok, err = pcall(Heartbeat.Write)
+				if not ok then
+					warn("[Heartbeat] Write() errored, will retry next tick: " .. tostring(err))
+				end
 				task.wait(INTERVAL)
 			end
 
