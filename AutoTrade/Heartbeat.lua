@@ -41,7 +41,71 @@ return function(ctx)
 		inventoryReady = false,
 		tradeReady = false,
 		kickDetected = false,
+		connectionAlive = true,
 	}
+
+	-- [AUTOTRADE HEARTBEAT CONNECTION-LIVENESS PATCH -- 2026-07-13]
+	-- None of the checks below this originally caught a real disconnect:
+	-- game:IsLoaded(), Players.LocalPlayer.Parent, and the inventory/trade
+	-- module presence checks all stay true forever once satisfied once,
+	-- even after the live server connection dies (client shows the
+	-- built-in "disconnected" overlay while the injected script keeps
+	-- running). getLiveTokenBalance() reads Replion's last cached value,
+	-- which doesn't error on disconnect either. Result: the write loop
+	-- kept stamping a fresh os.time() onto an otherwise-frozen snapshot
+	-- forever, so Python's recovery.py always saw a "healthy, fresh"
+	-- heartbeat no matter how long the real connection had been dead --
+	-- confirmed from a real production heartbeat file that stayed
+	-- deliveryReady=true throughout a disconnect with no [Recovery] log
+	-- lines at all.
+	--
+	-- workspace:GetServerTimeNow() is synced from the server over the
+	-- network -- it FREEZES on a real disconnect, while os.clock() (a
+	-- pure local clock) keeps advancing normally. Comparing the two over
+	-- a real-time window is a reliable, UI-text-independent way to detect
+	-- "still connected" that doesn't depend on the exact wording of
+	-- whatever disconnect overlay Roblox happens to show.
+	local lastServerTimeSample = nil
+	local lastServerTimeSampleClock = nil
+	local connectionStalled = false
+
+	local function checkServerConnectionAlive()
+		local ok, serverTime = pcall(function()
+			return workspace:GetServerTimeNow()
+		end)
+
+		if not ok or type(serverTime) ~= "number" then
+			-- Can't read it at all -- don't flip everything red on this
+			-- alone, that's a different kind of unknown than a confirmed
+			-- disconnect. Keep whatever the last known state was.
+			return not connectionStalled
+		end
+
+		local nowClock = os.clock()
+
+		if lastServerTimeSample == nil then
+			lastServerTimeSample = serverTime
+			lastServerTimeSampleClock = nowClock
+			return true
+		end
+
+		local realElapsed = nowClock - lastServerTimeSampleClock
+
+		-- Only judge over a big enough real-time window so normal jitter
+		-- (frame hitches, GC pauses) can't false-positive this.
+		if realElapsed >= 5 then
+			local serverElapsed = serverTime - lastServerTimeSample
+			-- Server clock advancing less than half of real elapsed time
+			-- means we're not actually receiving live updates anymore.
+			connectionStalled = serverElapsed < (realElapsed * 0.5)
+
+			lastServerTimeSample = serverTime
+			lastServerTimeSampleClock = nowClock
+		end
+
+		return not connectionStalled
+	end
+	-- [/AUTOTRADE HEARTBEAT CONNECTION-LIVENESS PATCH]
 
 	local DANGEROUS_PHASES = {
 		confirm_sent = true,
@@ -227,7 +291,17 @@ return function(ctx)
 			inventoryReady = false,
 			tradeReady = false,
 			kickDetected = false,
+			connectionAlive = true,
 		}
+
+		local connectionAlive = checkServerConnectionAlive()
+		info.connectionAlive = connectionAlive
+		if not connectionAlive then
+			info.reason = "server_connection_stalled"
+			cachedReady = false
+			cachedReadyInfo = info
+			return false, info
+		end
 
 		local kicked, kickText = scanForKickMessage()
 		if kicked then
@@ -309,6 +383,7 @@ return function(ctx)
 		data.inventoryReady = readyInfo.inventoryReady == true
 		data.tradeReady = readyInfo.tradeReady == true
 		data.kickDetected = readyInfo.kickDetected == true
+		data.connectionAlive = readyInfo.connectionAlive ~= false
 		data.safeToRetry = data.safeToRetry ~= false
 		data.dangerous = data.dangerous == true
 
