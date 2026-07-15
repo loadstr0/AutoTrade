@@ -148,6 +148,38 @@ return function(ctx)
 		return player.Name, player.UserId
 	end
 
+	-- [AUTOTRADE HEARTBEAT LIVE PLAYERS PATCH -- 2026-07-16]
+	-- Python's buyer-join detection previously relied only on Roblox's
+	-- public private-servers web API (games.roblox.com/v1/games/{id}/
+	-- private-servers), which is a cached, paginated, eventually-consistent
+	-- view of the server -- CONFIRMED LIVE: a real buyer (wacks6767) sat in
+	-- "Current candidates" for 25+ minutes without ever being detected as
+	-- joined, even though they really were in the server the whole time.
+	-- Players:GetPlayers() from right here inside the actual server is the
+	-- ground truth with zero API lag -- it's exactly what's actually
+	-- rendered in-game. Stamping the live roster onto every heartbeat tick
+	-- lets Python check this first before ever falling back to the web API.
+	local function getLivePlayers()
+		local ok, list = pcall(function()
+			local out = {}
+			for _, p in ipairs(Players:GetPlayers()) do
+				table.insert(out, {
+					name = p.Name,
+					displayName = p.DisplayName,
+					userId = p.UserId,
+				})
+			end
+			return out
+		end)
+
+		if ok then
+			return list
+		end
+
+		return {}
+	end
+	-- [/AUTOTRADE HEARTBEAT LIVE PLAYERS PATCH]
+
 	-- [AUTOTRADE HEARTBEAT TOKEN PATCH]
 	local function getLiveTokenBalance()
 		local ok, result = pcall(function()
@@ -374,6 +406,8 @@ return function(ctx)
 		data.jobId = game.JobId
 		data.playerName = playerName
 		data.playerUserId = playerUserId
+		data.players = getLivePlayers()
+		data.playersUpdatedAt = os.time()
 		data.currentTokens = liveTokens
 		data.tokenBalanceSource = tokenSource
 		data.tokenBalanceError = tokenError

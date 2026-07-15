@@ -2,6 +2,29 @@
 
 local HttpService = game:GetService("HttpService")
 
+-- Place-scoped loading.
+-- This bridge/module set (Heartbeat, Gift/Trade/Supply mains, RestockWatcher,
+-- etc.) is Blade Ball-specific. As more games (starting with Grow a Garden 2)
+-- get their own trading mechanics, this same Loader.lua may end up injected
+-- into any game's client, so it must refuse to run the Blade Ball module set
+-- anywhere except the actual Blade Ball place. Override via
+-- getgenv().AutoTradeExpectedPlaceId if you ever need to bypass this for
+-- local testing.
+local BLADE_BALL_PLACE_ID = 13772394625
+local EXPECTED_PLACE_ID = getgenv().AutoTradeExpectedPlaceId or BLADE_BALL_PLACE_ID
+local CURRENT_PLACE_ID = game.PlaceId
+
+if CURRENT_PLACE_ID ~= EXPECTED_PLACE_ID then
+	warn(
+		"[AutoTradeLoader] Refusing to load Blade Ball AutoTrade modules: current PlaceId "
+			.. tostring(CURRENT_PLACE_ID)
+			.. " does not match expected Blade Ball PlaceId "
+			.. tostring(EXPECTED_PLACE_ID)
+			.. ". (Set getgenv().AutoTradeExpectedPlaceId to override.)"
+	)
+	return
+end
+
 local BASE = getgenv().AutoTradeBase or "https://raw.githubusercontent.com/loadstr0/AutoTrade/main/AutoTrade/"
 local BRIDGE_FILE = getgenv().AutoTradeBridgeFile or "autotrade_bridge.json"
 
