@@ -16,7 +16,17 @@ return function(ctx)
 
 	local processed = getgenv().AutoTradeProcessedBridgeIds
 	local busy = false
-	local lastIdleReason = nil
+	-- BUG FIX: was one shared `lastIdleReason` used for two different
+	-- idle conditions (bridge file missing/empty vs. queue has no ready
+	-- buyers). Every poll where the bridge file read succeeded reset it
+	-- to nil right before the queue de-dupe check ran, so that check
+	-- always compared against nil and always logged -- printing the
+	-- exact same "Waiting for queue job: no_ready_buyers ..." line every
+	-- single poll (every POLL_SECONDS) instead of only when it changes.
+	-- Split into two independent trackers so resetting one can't wipe
+	-- out the other's de-dupe state.
+	local lastFileIdleReason = nil
+	local lastQueueIdleReason = nil
 
 	local function hasText(s)
 		return type(s) == "string" and s:gsub("%s+", "") ~= ""
@@ -464,12 +474,13 @@ return function(ctx)
 				local data, err = readBridgeFile()
 
 				if data then
-					lastIdleReason = nil
+					lastFileIdleReason = nil
 
 					local jobs = extractJobs(data)
 					local job, reason, pendingCount, readyCount, expiredCount = chooseNextJob(jobs)
 
 					if job then
+						lastQueueIdleReason = nil
 						if Heartbeat and Heartbeat.SetPhase then
 							Heartbeat.SetPhase("queue_job_ready", { safeToRetry = true, dangerous = false })
 						end
@@ -478,19 +489,19 @@ return function(ctx)
 					else
 						local message = reason .. " pending=" .. tostring(pendingCount) .. " ready=" .. tostring(readyCount) .. " expired=" .. tostring(expiredCount)
 
-						if lastIdleReason ~= message then
+						if lastQueueIdleReason ~= message then
 							if Heartbeat and Heartbeat.SetPhase then
 								Heartbeat.SetPhase("waiting_queue", { message = message, safeToRetry = true, dangerous = false })
 							end
 							Logger.info("Waiting for queue job:", message)
-							lastIdleReason = message
+							lastQueueIdleReason = message
 						end
 					end
 				else
 					if err == "missing" or err == "idle_empty" or err == "idle_empty_object" or err == "idle_invalid_json" then
-						if lastIdleReason ~= err then
+						if lastFileIdleReason ~= err then
 							Logger.info("Waiting for bridge file job:", err)
-							lastIdleReason = err
+							lastFileIdleReason = err
 						end
 					else
 						Logger.warn("Bridge read skipped:", err)
