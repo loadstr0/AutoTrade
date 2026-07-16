@@ -2,57 +2,88 @@
 
 local HttpService = game:GetService("HttpService")
 
--- Place-scoped loading.
--- This bridge/module set (Heartbeat, Gift/Trade/Supply mains, RestockWatcher,
--- etc.) is Blade Ball-specific. As more games (starting with Grow a Garden 2)
--- get their own trading mechanics, this same Loader.lua may end up injected
--- into any game's client, so it must refuse to run the Blade Ball module set
--- anywhere except the actual Blade Ball place. Override via
--- getgenv().AutoTradeExpectedPlaceId if you ever need to bypass this for
--- local testing.
+-- Multi-game place-scoped loading (2026-07-16).
+-- One shared Loader.lua, injected into any game's client, picks which
+-- game's module folder + file list to fetch based on game.PlaceId. This
+-- mirrors the Python side's existing blade_ball/ + core/ + BLADESPINS_GAME
+-- selector pattern -- one loading mechanism, per-game module sets.
+--
+-- Each game's Lua files live in their OWN subfolder under AutoTrade/ in
+-- this same repo (AutoTrade/BB/ for Blade Ball, AutoTrade/GAG2/ for Grow
+-- a Garden 2 once it exists) so a bug fix to one game's modules can never
+-- accidentally affect another's, same reasoning as the Python side having
+-- a separate config.py per game folder.
+--
+-- To add a new game: add its real PlaceId + file list below. Until a
+-- game's PlaceId is set (left nil), the loader will not run for it.
 local BLADE_BALL_PLACE_ID = 13772394625
-local EXPECTED_PLACE_ID = getgenv().AutoTradeExpectedPlaceId or BLADE_BALL_PLACE_ID
-local CURRENT_PLACE_ID = game.PlaceId
+local GAG2_PLACE_ID = nil -- TODO: set once Grow a Garden 2's PlaceId is known.
 
-if CURRENT_PLACE_ID ~= EXPECTED_PLACE_ID then
+local GAME_FOLDERS = {
+	[BLADE_BALL_PLACE_ID] = {
+		name = "Blade Ball",
+		folder = "BB",
+		files = {
+			"Logger",
+			"Config",
+			"Heartbeat",
+			"PlayersUtil",
+			"ProductResolver",
+			"InventoryUtil",
+			"SupplyState",
+			"SupplyRAP",
+			"SupplyPlanner",
+			"SupplyScanner",
+			"SupplyBuyer",
+			"SupplyMain",
+			"GiftActions",
+			"GiftMain",
+			"ChatActions",
+			"TradeState",
+			"TradeActions",
+			"TradeMain",
+			"TokenTradeMain",
+			"Main",
+			"RestockAnalyzer",
+			"RestockWatcher",
+			"BridgeWatcher",
+		},
+	},
+}
+
+if GAG2_PLACE_ID then
+	GAME_FOLDERS[GAG2_PLACE_ID] = {
+		name = "Grow a Garden 2",
+		folder = "GAG2",
+		files = {
+			-- TODO: populate once GAG2 modules exist.
+		},
+	}
+end
+
+-- getgenv().AutoTradeExpectedPlaceId still works as a full override for
+-- local testing (forces which game's module set loads, regardless of the
+-- place you're actually standing in).
+local CURRENT_PLACE_ID = game.PlaceId
+local EFFECTIVE_PLACE_ID = getgenv().AutoTradeExpectedPlaceId or CURRENT_PLACE_ID
+local GAME = GAME_FOLDERS[EFFECTIVE_PLACE_ID]
+
+if not GAME then
 	warn(
-		"[AutoTradeLoader] Refusing to load Blade Ball AutoTrade modules: current PlaceId "
+		"[AutoTradeLoader] Refusing to load: current PlaceId "
 			.. tostring(CURRENT_PLACE_ID)
-			.. " does not match expected Blade Ball PlaceId "
-			.. tostring(EXPECTED_PLACE_ID)
-			.. ". (Set getgenv().AutoTradeExpectedPlaceId to override.)"
+			.. " has no registered AutoTrade module set. "
+			.. "(Set getgenv().AutoTradeExpectedPlaceId to override for local testing.)"
 	)
 	return
 end
 
-local BASE = getgenv().AutoTradeBase or "https://raw.githubusercontent.com/loadstr0/AutoTrade/main/AutoTrade/"
-local BRIDGE_FILE = getgenv().AutoTradeBridgeFile or "autotrade_bridge.json"
+print("[AutoTradeLoader] Detected game: " .. GAME.name .. " (PlaceId " .. tostring(EFFECTIVE_PLACE_ID) .. ")")
 
-local FILES = {
-	"Logger",
-	"Config",
-	"Heartbeat",
-	"PlayersUtil",
-	"ProductResolver",
-	"InventoryUtil",
-	"SupplyState",
-	"SupplyRAP",
-	"SupplyPlanner",
-	"SupplyScanner",
-	"SupplyBuyer",
-	"SupplyMain",
-	"GiftActions",
-	"GiftMain",
-	"ChatActions",
-	"TradeState",
-	"TradeActions",
-	"TradeMain",
-	"TokenTradeMain",
-	"Main",
-	"RestockAnalyzer",
-	"RestockWatcher",
-	"BridgeWatcher",
-}
+local REPO_BASE = getgenv().AutoTradeRepoBase or "https://raw.githubusercontent.com/loadstr0/AutoTrade/main/AutoTrade/"
+local BASE = getgenv().AutoTradeBase or (REPO_BASE .. GAME.folder .. "/")
+local FILES = GAME.files
+local BRIDGE_FILE = getgenv().AutoTradeBridgeFile or "autotrade_bridge.json"
 
 local function getRequest()
 	if typeof(request) == "function" then
