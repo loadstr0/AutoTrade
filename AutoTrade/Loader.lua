@@ -17,7 +17,7 @@ local HttpService = game:GetService("HttpService")
 -- To add a new game: add its real PlaceId + file list below. Until a
 -- game's PlaceId is set (left nil), the loader will not run for it.
 local BLADE_BALL_PLACE_ID = 13772394625
-local GAG2_PLACE_ID = nil -- TODO: set once Grow a Garden 2's PlaceId is known.
+local GAG2_PLACE_ID = 97598239454123
 
 local GAME_FOLDERS = {
 	[BLADE_BALL_PLACE_ID] = {
@@ -55,8 +55,22 @@ if GAG2_PLACE_ID then
 	GAME_FOLDERS[GAG2_PLACE_ID] = {
 		name = "Grow a Garden 2",
 		folder = "GAG2",
+		-- Order matters: loadRemote() calls each module's factory
+		-- function(ctx) immediately as it's fetched, and later modules
+		-- read earlier ones off ctx.Modules (e.g. PlayersUtil/ItemResolver/
+		-- MailboxGiftActions all read ctx.Modules.Logger; MailboxGiftMain
+		-- reads Logger+Heartbeat+PlayersUtil+ItemResolver+MailboxGiftActions;
+		-- Main reads Logger+Heartbeat+Config+MailboxGiftMain). This is the
+		-- same dependency-ordering convention BB's file list already uses.
 		files = {
-			-- TODO: populate once GAG2 modules exist.
+			"Logger",
+			"Config",
+			"Heartbeat",
+			"PlayersUtil",
+			"ItemResolver",
+			"MailboxGiftActions",
+			"MailboxGiftMain",
+			"Main",
 		},
 	}
 end
