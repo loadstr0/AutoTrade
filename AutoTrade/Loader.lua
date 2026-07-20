@@ -1,6 +1,44 @@
 -- AutoTrade/Loader.lua
 
 local HttpService = game:GetService("HttpService")
+local Players = game:GetService("Players")
+local VirtualUser = game:GetService("VirtualUser")
+
+-- Keep the Roblox client alive while it waits for bridge jobs. Store the
+-- connection in getgenv() so re-running Loader replaces the old listener
+-- instead of stacking duplicate anti-AFK callbacks.
+local function startAntiAfk()
+	local env = getgenv()
+
+	if env.AutoTradeAntiAfk == false then
+		return
+	end
+
+	if env.AutoTradeAntiAfkConnection then
+		pcall(function()
+			env.AutoTradeAntiAfkConnection:Disconnect()
+		end)
+		env.AutoTradeAntiAfkConnection = nil
+	end
+
+	local localPlayer = Players.LocalPlayer
+
+	if not localPlayer then
+		warn("[AutoTradeLoader] Anti-AFK unavailable: LocalPlayer not ready.")
+		return
+	end
+
+	env.AutoTradeAntiAfkConnection = localPlayer.Idled:Connect(function()
+		pcall(function()
+			VirtualUser:CaptureController()
+			VirtualUser:ClickButton2(Vector2.new())
+		end)
+	end)
+
+	print("[AutoTradeLoader] Anti-AFK enabled.")
+end
+
+startAntiAfk()
 
 -- Multi-game place-scoped loading (2026-07-16).
 -- One shared Loader.lua, injected into any game's client, picks which
@@ -71,6 +109,7 @@ if GAG2_PLACE_ID then
 			"MailboxGiftActions",
 			"MailboxGiftMain",
 			"Main",
+			"BridgeWatcher",
 		},
 	}
 end
