@@ -39,13 +39,9 @@ return function(ctx)
 	Config.HeartbeatFile = "gag2_autotrade_heartbeat.json"
 	Config.HeartbeatSeconds = 3
 
-	-- MailboxGift safety. STAYS SAFE BY DEFAULT (dry run, no real send)
-	-- until core/lua_bridge.py's config.AUTOTRADE_MAILBOX_DRY_RUN /
-	-- AUTOTRADE_ALLOW_MAILBOX_SEND are both explicitly flipped on the
-	-- Python side AND a real send has been verified once. See
-	-- grow_a_garden/config.py's module docstring for why this is still
-	-- untested -- Networking.Mailbox.SendBatch has never actually been
-	-- fired live outside the real MailboxController UI.
+	-- Defense-in-depth defaults stay safe here; each Python bridge payload
+	-- must explicitly enable a real send. SendBatch was verified live on
+	-- 2026-07-20 with one Trowel, including receipt, note, and inventory.
 	Config.MailboxItemsSpec = nil
 	Config.MailboxGiftDryRun = true
 	Config.AllowMailboxSend = false
