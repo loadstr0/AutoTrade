@@ -96,85 +96,48 @@ return function(ctx)
 			return false, "missing_SendTradeRequest_remote"
 		end
 
-		local userId = buyer.UserId
-		local username = buyer.Name
-		local displayName = buyer.DisplayName
-
 		Logger.info("Preparing trade request:")
-		Logger.info("  Buyer.Name =", username)
-		Logger.info("  Buyer.DisplayName =", displayName)
-		Logger.info("  Buyer.UserId =", userId)
+		Logger.info("  Buyer.Name =", buyer.Name)
+		Logger.info("  Buyer.DisplayName =", buyer.DisplayName)
+		Logger.info("  Buyer.UserId =", buyer.UserId)
 
-		local attempts = {
-			{
-				name = "buyer Player instance",
-				fn = function()
-					return invoke("SendTradeRequest buyer Player instance", Remotes.SendTradeRequest, buyer)
-				end,
-			},
-			{
-				name = "buyer UserId number",
-				fn = function()
-					return invoke("SendTradeRequest buyer UserId number", Remotes.SendTradeRequest, userId)
-				end,
-			},
-			{
-				name = "buyer UserId string",
-				fn = function()
-					return invoke("SendTradeRequest buyer UserId string", Remotes.SendTradeRequest, tostring(userId))
-				end,
-			},
-			{
-				name = "buyer username string",
-				fn = function()
-					return invoke("SendTradeRequest buyer username string", Remotes.SendTradeRequest, username)
-				end,
-			},
-			{
-				name = "buyer displayName string",
-				fn = function()
-					return invoke("SendTradeRequest buyer displayName string", Remotes.SendTradeRequest, displayName)
-				end,
-			},
-			{
-				name = "table {UserId}",
-				fn = function()
-					return invoke("SendTradeRequest table UserId", Remotes.SendTradeRequest, {
-						UserId = userId,
-					})
-				end,
-			},
-			{
-				name = "table {Player, UserId, Name}",
-				fn = function()
-					return invoke("SendTradeRequest table Player/UserId/Name", Remotes.SendTradeRequest, {
-						Player = buyer,
-						UserId = userId,
-						Name = username,
-					})
-				end,
-			},
-		}
-
+		-- CONFIRMED 2026-07-22 from the real client source
+		-- (Controllers.Trading.TradeRequestController.lua's own SendTrade
+		-- function): Remotes.SendTradeRequest:InvokeServer(p2), where p2 is
+		-- the actual Player instance passed in from observePlayer() (which
+		-- explicitly skips LocalPlayer, confirming p2 is a real other-player
+		-- Player object -- not a UserId, username, or table). This used to
+		-- brute-force 7 different argument shapes across up to 3 rounds
+		-- because this signature wasn't confirmed; the other 6 never once
+		-- succeeded in any real trace and don't exist anywhere in the real
+		-- game code, so they're gone. Rounds are kept (transient hiccups are
+		-- still real) but each round is now one real attempt instead of
+		-- seven guesses.
+		--
+		-- Also explains why early rounds can still legitimately fail even
+		-- with the right signature: the real SendTrade() gates on
+		-- PlayerStates.options.CanInvite, itself driven by the buyer's real
+		-- AllowRequests privacy setting ("Friends" vs "Everyone"). If
+		-- they're not accepting requests from strangers, the server
+		-- rejects this exact same call -- that's a privacy-setting failure,
+		-- not a signature failure, and is already handled by watcher.py's
+		-- trade-privacy retry (asking the buyer to send the request to us
+		-- instead) rather than anything here.
 		for round = 1, 3 do
 			Logger.info("Trade request round:", round)
 
 			openTradeUiState()
 
-			for _, attempt in ipairs(attempts) do
-				Logger.info("Trying SendTradeRequest:", attempt.name)
+			Logger.info("Trying SendTradeRequest: buyer Player instance")
 
-				local ok, result = attempt.fn()
+			local ok, result = invoke("SendTradeRequest buyer Player instance", Remotes.SendTradeRequest, buyer)
 
-				if ok then
-					Logger.info("SendTradeRequest worked with:", attempt.name)
-					return true, result
-				end
-
-				task.wait(0.75)
+			if ok then
+				Logger.info("SendTradeRequest worked.")
+				return true, result
 			end
 
-			Logger.warn("Trade request round failed:", round)
+			Logger.warn("Trade request round failed:", round, "reason:", tostring(result))
 			task.wait(2)
 		end
 
